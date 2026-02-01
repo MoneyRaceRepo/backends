@@ -29,6 +29,46 @@ router.post('/recommend', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /ai/chat
+ * General purpose chat completion with EigenAI
+ */
+router.post('/chat', async (req: Request, res: Response) => {
+  try {
+    const { messages, options } = req.body;
+
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Messages array required' });
+    }
+
+    // Validate message format
+    for (const msg of messages) {
+      if (!msg.role || !msg.content) {
+        return res.status(400).json({
+          error: 'Each message must have role and content',
+        });
+      }
+      if (!['system', 'user', 'assistant'].includes(msg.role)) {
+        return res.status(400).json({
+          error: 'Invalid message role. Must be system, user, or assistant',
+        });
+      }
+    }
+
+    const response = await aiService.generalChat(messages, options);
+
+    res.json({
+      success: true,
+      response,
+    });
+  } catch (error: any) {
+    console.error('AI chat error:', error);
+    res.status(500).json({
+      error: error.message || 'Failed to complete chat',
+    });
+  }
+});
+
+/**
  * GET /ai/strategies
  * Get all available strategies
  */

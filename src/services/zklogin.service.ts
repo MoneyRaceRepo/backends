@@ -1,3 +1,5 @@
+import jwt from 'jsonwebtoken';
+import jwksClient from 'jwks-rsa';
 import type { AuthenticatedUser, ZkLoginPayload } from '../types/index.js';
 
 /**
@@ -5,14 +7,60 @@ import type { AuthenticatedUser, ZkLoginPayload } from '../types/index.js';
  * Handles Google OAuth JWT verification for Sui zkLogin
  */
 export class ZkLoginService {
-  // /**
-  //  * Verify Google JWT token (for future implementation)
-  //  */
-  // async verifyGoogleJWT(jwt: string): Promise<any> {
-  //   // For MVP: Use simplified auth instead
-  //   // Production would use proper JWKS verification
-  //   throw new Error('Use authenticateSimplified() for MVP');
-  // }
+  private jwksClient: jwksClient.JwksClient;
+  private googleClientId: string;
+
+  constructor() {
+    // JWKS client to fetch Google's public keys
+    this.jwksClient = jwksClient({
+      jwksUri: 'https://www.googleapis.com/oauth2/v3/certs',
+      cache: true,
+      cacheMaxAge: 86400000, // 24 hours
+    });
+
+    this.googleClientId = process.env.GOOGLE_CLIENT_ID || '';
+
+    if (!this.googleClientId) {
+      console.warn('GOOGLE_CLIENT_ID not set - JWT verification will fail');
+    }
+  }
+
+  /**
+   * Get signing key for JWT verification
+   */
+  private async getSigningKey(kid: string): Promise<string> {
+    const key = await this.jwksClient.getSigningKey(kid);
+    return key.getPublicKey();
+  }
+
+  /**
+   * Verify Google JWT token with proper signature verification
+   */
+  async verifyGoogleJWT(token: string): Promise<any> {
+    try {
+      // Decode header to get key ID
+      const decoded = jwt.decode(token, { complete: true });
+
+      if (!decoded || !decoded.header.kid) {
+        throw new Error('Invalid JWT: missing key ID');
+      }
+
+      // Get public key from Google
+      const signingKey = await this.getSigningKey(decoded.header.kid);
+
+      // Verify JWT signature and claims
+      const payload = jwt.verify(token, signingKey, {
+        algorithms: ['RS256'],
+        issuer: ['https://accounts.google.com', 'accounts.google.com'],
+        audience: this.googleClientId,
+      });
+
+      return payload;
+    } catch (error: any) {
+      console.error('JWT verification failed:', error.message);
+      throw new Error(`JWT verification failed: ${error.message}`);
+    }
+  }
 
   /**
    * Generate Sui address from zkLogin payload
@@ -24,7 +72,7 @@ export class ZkLoginService {
     // For now, we'll derive a deterministic address from JWT sub
 
     const { jwt } = payload;
-    const decoded = this.decodeJWT(jwt);
+    const decoded = await this.verifyGoogleJWT(jwt);
 
     // Simple deterministic address generation (NOT production-ready)
     // In real zkLogin, this involves zkSNARK proofs
@@ -33,7 +81,7 @@ export class ZkLoginService {
   }
 
   /**
-   * Decode JWT without verification (for hackathon)
+   * Decode JWT without verification (UNSAFE - use only for debugging)
    */
   private decodeJWT(jwt: string): any {
     const parts = jwt.split('.');
@@ -65,24 +113,24 @@ export class ZkLoginService {
   }
 
   /**
-   * Simplified auth for hackathon (bypasses full zkLogin complexity)
+   * Authenticate user with verified Google JWT
    */
-  async authenticateSimplified(jwt: string): Promise<AuthenticatedUser> {
+  async authenticateSimplified(token: string): Promise<AuthenticatedUser> {
     try {
-      const decoded = this.decodeJWT(jwt);
+      // SECURE: Verify JWT signature, issuer, and audience
+      const decoded = await this.verifyGoogleJWT(token);
 
-      // Basic validation
+      // Validate required fields
       if (!decoded.sub || !decoded.email) {
-        throw new Error('Invalid JWT payload');
+        throw new Error('Invalid JWT payload: missing required fields');
       }
 
-      // Check expiration
-      const now = Math.floor(Date.now() / 1000);
-      if (decoded.exp && decoded.exp < now) {
-        throw new Error('JWT expired');
+      // Additional security checks
+      if (!decoded.email_verified) {
+        throw new Error('Email not verified');
       }
 
-      // Generate Sui address (simplified)
+      // Generate deterministic Sui address from Google sub
       const hash = await this.hashString(decoded.sub);
       const address = `0x${hash.slice(0, 64)}`;
 
@@ -91,9 +139,9 @@ export class ZkLoginService {
         provider: 'google',
         sub: decoded.sub,
       };
-    } catch (error) {
-      console.error('Authentication failed:', error);
-      throw new Error('Authentication failed');
+    } catch (error: any) {
+      console.error('Authentication failed:', error.message);
+      throw new Error(`Authentication failed: ${error.message}`);
     }
   }
 }

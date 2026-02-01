@@ -104,3 +104,43 @@ export interface ClaimRequest {
   vaultId: string;
   playerPositionId: string;
 }
+
+// EigenAI Types
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+export interface ChatCompletionRequest {
+  model?: string;
+  messages: ChatMessage[];
+  max_tokens?: number;
+  chat_template_kwargs?: {
+    thinking?: boolean;
+  };
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  stream?: boolean;
+}
+
+export interface ChatCompletionChoice {
+  index: number;
+  message: ChatMessage;
+  finish_reason: string;
+}
+
+export interface ChatCompletionUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+export interface ChatCompletionResponse {
+  id: string;
+  object: string;
+  created: number;
+  model: string;
+  choices: ChatCompletionChoice[];
+  usage: ChatCompletionUsage;
+}

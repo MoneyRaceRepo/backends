@@ -16,7 +16,7 @@ Backend server untuk MoneyRace - Saving game dengan AI recommendation dan Sui bl
 - **Framework**: Express.js
 - **Blockchain**: Sui (via @mysten/sui.js)
 - **Auth**: zkLogin (simplified for MVP)
-- **AI**: Dummy strategies (keyword-based)
+- **AI**: EigenAI (deepseek-v31-terminus model)
 
 ## Setup
 
@@ -47,6 +47,8 @@ SUI_RPC=https://fullnode.testnet.sui.io
 NETWORK=testnet
 
 # Gas Sponsor (REQUIRED)
+# PENTING: Private key ini HARUS sama dengan yang deploy smart contract
+# agar memiliki AdminCap untuk start/finalize room
 SPONSOR_PRIVATE_KEY=suiprivkey1qp...
 
 # Smart Contract (isi setelah deploy)
@@ -55,6 +57,9 @@ ADMIN_CAP_ID=0x...
 
 # zkLogin (optional untuk MVP)
 GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
+
+# AI (EigenAI - REQUIRED untuk AI features)
+EIGENAI_API_KEY=sk-your_eigenai_api_key
 
 # Frontend
 FRONTEND_URL=http://localhost:3000
@@ -194,6 +199,36 @@ Response:
   "parsedIntent": {
     "riskTolerance": "low",
     "goal": "retirement"
+  }
+}
+```
+
+#### Chat with AI (EigenAI)
+```bash
+POST /ai/chat
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "What is the best saving strategy for a beginner?" }
+  ],
+  "options": {
+    "temperature": 0.7,
+    "max_tokens": 1000
+  }
+}
+
+Response:
+{
+  "success": true,
+  "response": {
+    "id": "...",
+    "model": "deepseek-v31-terminus",
+    "choices": [...],
+    "billing": {
+      "creditsRemaining": 0.99,
+      "creditsCharged": 0.001
+    }
   }
 }
 ```
@@ -348,8 +383,9 @@ backend/
 - Methods: createRoom, joinRoom, deposit, claimAll, etc.
 
 #### AIService
-- Parses user prompts (keyword-based)
-- Returns strategy recommendations
+- Powered by EigenAI (deepseek-v31-terminus model)
+- Chat completion API for general queries
+- Strategy recommendations based on user prompts
 - 3 strategies: Stable Saver, Balanced Builder, Growth Chaser
 
 #### ZkLoginService
@@ -398,6 +434,12 @@ curl -X POST http://localhost:3001/room/create \
 - Fund sponsor address dengan testnet SUI
 - Minimal 1 SUI untuk testing
 
+### Error: "Object is owned by account address X, but given owner/signer address is Y"
+- Ini terjadi karena `SPONSOR_PRIVATE_KEY` berbeda dengan yang deploy smart contract
+- AdminCap dimiliki oleh address yang deploy contract
+- Solusi: Gunakan private key yang sama dengan yang deploy contract
+- Atau transfer AdminCap ke sponsor wallet
+
 ### TypeScript Errors
 ```bash
 # Clean rebuild
@@ -408,17 +450,34 @@ npm run build
 ## Next Steps
 
 1. ✅ Backend setup - DONE
-2. ⏭️ Deploy smart contract
-3. ⏭️ Build frontend
-4. ⏭️ Integration testing
-5. ⏭️ Demo preparation
+2. ✅ Deploy smart contract - DONE
+3. ✅ AI Integration (EigenAI) - DONE
+4. ✅ Room Create/Start - DONE
+5. ⏭️ Build frontend
+6. ⏭️ Integration testing
+7. ⏭️ Demo preparation
+
+## Tested & Working Endpoints
+
+| Endpoint | Status | Notes |
+|----------|--------|-------|
+| `GET /health` | ✅ OK | Server health check |
+| `GET /ai/strategies` | ✅ OK | List all strategies |
+| `POST /ai/recommend` | ✅ OK | AI strategy recommendations |
+| `POST /ai/chat` | ✅ OK | EigenAI chat completion |
+| `POST /room/create` | ✅ OK | Create room on blockchain |
+| `GET /room/:id` | ✅ OK | Fetch room/vault data |
+| `POST /room/start` | ✅ OK | Start room (requires AdminCap) |
+| `POST /auth/login` | ⚠️ | Requires real Google OAuth JWT |
 
 ## Notes untuk Hackathon
 
 - **zkLogin**: Simplified untuk MVP, production perlu full implementation
-- **AI**: Dummy strategies, bisa diganti dengan real LLM
+- **AI**: Powered by EigenAI deepseek-v31-terminus model untuk intelligent responses
 - **Gas**: Semua transactions di-sponsor oleh backend
 - **Clock**: Sui clock object ID = `0x6` (shared object)
+- **API Base URL**: `http://localhost:3001` (tanpa prefix `/api`)
+- **AdminCap**: Required untuk `start_room`, `finalize_room`, `fund_reward_pool`. Pastikan SPONSOR_PRIVATE_KEY adalah key yang deploy contract
 
 ## Contact
 
