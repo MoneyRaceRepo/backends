@@ -1,7 +1,3 @@
-import dotenv from 'dotenv';
-
-dotenv.config();
-
 export const config = {
   // Server
   port: parseInt(process.env.PORT || '3001'),
@@ -17,6 +13,7 @@ export const config = {
   // Smart Contract
   packageId: process.env.PACKAGE_ID || '',
   adminCapId: process.env.ADMIN_CAP_ID || '',
+  faucetId: process.env.FAUCET_ID || '',
 
   // zkLogin
   googleClientId: process.env.GOOGLE_CLIENT_ID || process.env.ZKLOGIN_CLIENT_ID || '',
@@ -28,6 +25,9 @@ export const config = {
 
   // Frontend
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+
+  // Database
+  databaseUrl: process.env.DATABASE_URL,
 } as const;
 
 // Validation

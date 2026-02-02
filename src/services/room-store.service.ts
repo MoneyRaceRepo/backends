@@ -9,6 +9,11 @@ let prisma: PrismaClient | null = null;
 
 function getPrismaClient() {
   if (!prisma) {
+    console.log('Initializing Prisma Client...');
+    console.log('DATABASE_URL:', process.env.DATABASE_URL ? '✓ Set' : '✗ Undefined');
+    if (!process.env.DATABASE_URL) {
+      throw new Error('DATABASE_URL is not set in environment variables');
+    }
     prisma = new PrismaClient();
   }
   return prisma;
@@ -16,7 +21,7 @@ function getPrismaClient() {
 
 interface RoomData {
   roomId: string;
-  vaultId?: string;
+  vaultId: string | null;
   creatorAddress: string;
   totalPeriods: number;
   depositAmount: number;
@@ -70,7 +75,7 @@ class RoomStoreService {
 
     return rooms.map((room) => ({
       roomId: room.roomId,
-      vaultId: room.vaultId || undefined,
+      vaultId: room.vaultId,
       creatorAddress: room.creatorAddress,
       totalPeriods: room.totalPeriods,
       depositAmount: Number(room.depositAmount),
@@ -94,7 +99,7 @@ class RoomStoreService {
 
     return {
       roomId: room.roomId,
-      vaultId: room.vaultId || undefined,
+      vaultId: room.vaultId,
       creatorAddress: room.creatorAddress,
       totalPeriods: room.totalPeriods,
       depositAmount: Number(room.depositAmount),
@@ -117,7 +122,7 @@ class RoomStoreService {
 
     return rooms.map((room) => ({
       roomId: room.roomId,
-      vaultId: room.vaultId || undefined,
+      vaultId: room.vaultId,
       creatorAddress: room.creatorAddress,
       totalPeriods: room.totalPeriods,
       depositAmount: Number(room.depositAmount),

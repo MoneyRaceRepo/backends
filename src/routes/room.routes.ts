@@ -127,9 +127,9 @@ router.post('/start', async (req: Request, res: Response) => {
  */
 router.post('/join', async (req: Request, res: Response) => {
   try {
-    const { roomId, vaultId, coinObjectId, clockId } = req.body;
+    const { roomId, vaultId, coinObjectId, clockId, userAddress } = req.body;
 
-    if (!roomId || !vaultId || !coinObjectId || !clockId) {
+    if (!roomId || !vaultId || !coinObjectId || !clockId || !userAddress) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
@@ -138,6 +138,7 @@ router.post('/join', async (req: Request, res: Response) => {
       vaultId,
       coinObjectId,
       clockId,
+      userAddress,
     });
 
     res.json({
@@ -213,7 +214,7 @@ router.post('/claim', async (req: Request, res: Response) => {
 
 /**
  * GET /room/:id
- * Get room data
+ * Get room data (blockchain + database)
  */
 router.get('/:id', async (req: Request, res: Response) => {
   try {
@@ -236,11 +237,24 @@ router.get('/:id', async (req: Request, res: Response) => {
       });
     }
 
+    // Fetch from database first to get vaultId
+    const dbRoom = await roomStoreService.getRoom(id);
+
+    // Fetch blockchain data
     const roomData = await relayerService.getRoomData(id);
+
+    // Merge database data with blockchain data
+    const mergedData = {
+      ...roomData,
+      vaultId: dbRoom?.vaultId || null,
+      transactionDigest: dbRoom?.transactionDigest || null,
+    };
+
+    console.log('✓ Room data merged:', { roomId: id, vaultId: mergedData.vaultId });
 
     res.json({
       success: true,
-      room: roomData,
+      room: mergedData,
     });
   } catch (error: any) {
     console.error('Get room error:', error);

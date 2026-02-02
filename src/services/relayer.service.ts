@@ -10,15 +10,19 @@ import type { TxResponse } from '../types/index.js';
  */
 export class RelayerService {
   /**
-   * Execute a sponsored transaction
+   * Execute a sponsored transaction (LEGACY - backend creates and signs tx)
    * The relayer pays for gas, making it gasless for users
    */
-  async executeSponsoredTx(tx: TransactionBlock): Promise<TxResponse> {
+  async executeSponsoredTx(tx: TransactionBlock, senderAddress?: string): Promise<TxResponse> {
     try {
+      // Don't set sender - let sponsor be the signer
+      // Input objects owned by user will still work as long as they're passed correctly
+      
       // Set gas budget
       tx.setGasBudget(100000000); // 0.1 SUI
 
       // Sign and execute with sponsor keypair
+      // SDK will automatically select gas coin from sponsor wallet
       const result = await suiClient.signAndExecuteTransactionBlock({
         signer: sponsorKeypair,
         transactionBlock: tx,
@@ -44,6 +48,53 @@ export class RelayerService {
     } catch (error: any) {
       console.error('Transaction execution failed:', error);
       throw new Error(`Transaction failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Execute a user-signed sponsored transaction
+   * User signs the transaction, sponsor adds gas payment and signature
+   * This is the proper way to do zkLogin sponsored transactions
+   */
+  async executeSponsoredTxWithUserSignature(
+    txBytes: Uint8Array | string,
+    userSignature: string
+  ): Promise<TxResponse> {
+    try {
+      // Convert txBytes to Uint8Array if it's a string
+      const txBytesArray = typeof txBytes === 'string'
+        ? Uint8Array.from(Buffer.from(txBytes, 'base64'))
+        : txBytes;
+
+      // Sponsor signs the transaction
+      const sponsorSignature = await sponsorKeypair.signTransactionBlock(txBytesArray);
+
+      // Execute with both signatures
+      const result = await suiClient.executeTransactionBlock({
+        transactionBlock: txBytesArray,
+        signature: [userSignature, sponsorSignature.signature],
+        options: {
+          showEffects: true,
+          showEvents: true,
+          showObjectChanges: true,
+        },
+      });
+
+      const success = result.effects?.status?.status === 'success';
+
+      console.log('Sponsored transaction executed:', {
+        digest: result.digest,
+        success,
+      });
+
+      return {
+        digest: result.digest,
+        success,
+        effects: result.effects,
+      };
+    } catch (error: any) {
+      console.error('Sponsored transaction execution failed:', error);
+      throw new Error(`Sponsored transaction failed: ${error.message}`);
     }
   }
 
@@ -98,16 +149,18 @@ export class RelayerService {
     vaultId: string;
     coinObjectId: string;
     clockId: string;
+    userAddress: string;
   }): Promise<TxResponse> {
     const tx = new TransactionBlock();
 
     tx.moveCall({
-      target: `${config.packageId}::money_race::join_room`,
+      target: `${config.packageId}::money_race::join_room_for`,
       arguments: [
         tx.object(params.roomId),
         tx.object(params.vaultId),
         tx.object(params.clockId),
         tx.object(params.coinObjectId),
+        tx.pure(params.userAddress, 'address'),
       ],
     });
 
@@ -258,6 +311,93 @@ export class RelayerService {
     } catch (error) {
       console.error('Failed to fetch player position:', error);
       throw new Error('Player position not found');
+    }
+  }
+
+  /**
+   * Mint USDC Mock Tokens to a specific recipient
+   */
+  async mintUSDC(recipient: string, amount: number): Promise<TxResponse> {
+    const tx = new TransactionBlock();
+
+    const USDC_FAUCET_ID = config.faucetId || '0x5099b301d2b96f1a21a9ed52d6825d49704052060cf2bb5fa33a280630cbcebd';
+    const CLOCK_ID = '0x6';
+
+    tx.moveCall({
+      target: `${config.packageId}::usdc::mint_to`,
+      arguments: [
+        tx.object(USDC_FAUCET_ID),
+        tx.pure(recipient, 'address'),
+        tx.pure(amount, 'u64'),
+        tx.object(CLOCK_ID),
+      ],
+    });
+
+    return this.executeSponsoredTx(tx);
+  }
+
+  /**
+   * Get USDC Balance
+   */
+  async getUSDCBalance(address: string): Promise<bigint> {
+    try {
+      const USDC_COIN_TYPE = `${config.packageId}::usdc::USDC`;
+
+      const coins = await suiClient.getCoins({
+        owner: address,
+        coinType: USDC_COIN_TYPE,
+      });
+
+      let totalBalance = 0n;
+      for (const coin of coins.data) {
+        totalBalance += BigInt(coin.balance);
+      }
+
+      return totalBalance;
+    } catch (error) {
+      console.error('Failed to fetch USDC balance:', error);
+      return 0n;
+    }
+  }
+
+  /**
+   * Get USDC Faucet Info (cooldown status)
+   */
+  async getUSDCFaucetInfo(address: string): Promise<{
+    canMint: boolean;
+    timeUntilNextMint: number;
+    lastMintTime: number | null;
+  }> {
+    try {
+      const USDC_FAUCET_ID = config.faucetId || '0x5099b301d2b96f1a21a9ed52d6825d49704052060cf2bb5fa33a280630cbcebd';
+      const CLOCK_ID = '0x6';
+
+      // Get faucet object to check cooldown
+      const faucetObject = await suiClient.getObject({
+        id: USDC_FAUCET_ID,
+        options: { showContent: true },
+      });
+
+      // Get current time from Clock
+      const clockObject = await suiClient.getObject({
+        id: CLOCK_ID,
+        options: { showContent: true },
+      });
+
+      // Parse faucet data to check last mint time
+      // This is a simplified version - actual implementation would query dynamic fields
+      return {
+        canMint: true, // Simplified - always allow for now
+        timeUntilNextMint: 0,
+        lastMintTime: null,
+      };
+    } catch (error) {
+      console.error('Failed to get faucet info:', error);
+      return {
+        canMint: true,
+        timeUntilNextMint: 0,
+        lastMintTime: null,
+      };
     }
   }
 }

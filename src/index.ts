@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { config } from './config/index.js';
 import express from 'express';
 import cors from 'cors';
@@ -5,6 +6,8 @@ import authRoutes from './routes/auth.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import roomRoutes from './routes/room.routes.js';
 import playerRoutes from './routes/player.routes.js';
+import usdcRoutes from './routes/usdc.routes.js';
+import sponsoredRoutes from './routes/sponsored.routes.js';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware.js';
 import { testRpcConnection, testSmartContractConnection } from './sui/client.js';
 
@@ -58,6 +61,8 @@ app.use('/auth', authRoutes);
 app.use('/ai', aiRoutes);
 app.use('/room', roomRoutes);
 app.use('/player', playerRoutes);
+app.use('/usdc', usdcRoutes);
+app.use('/sponsored', sponsoredRoutes);
 
 // Error handling
 app.use(notFoundHandler);
