@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { relayerService } from '../services/relayer.service.js';
 import { roomStoreService } from '../services/room-store.service.js';
 import { sponsorKeypair } from '../sui/sponsor.js';
+import { suiClient } from '../sui/client.js';
 
 const router = Router();
 
@@ -100,15 +101,65 @@ router.post('/create', async (req: Request, res: Response) => {
     let roomId: string | undefined;
     let vaultId: string | undefined;
 
+    console.log('Transaction result:', JSON.stringify(result, null, 2));
+
     // Extract from effects.created array
-    // The smart contract creates Room first, then Vault
+    // Check type to correctly identify Room vs Vault (order may vary)
     if (result.effects?.created && result.effects.created.length >= 2) {
-      roomId = result.effects.created[0].reference.objectId;
-      vaultId = result.effects.created[1].reference.objectId;
-      console.log('✓ Room created:', roomId);
-      console.log('✓ Vault created:', vaultId);
+      console.log('Found created objects:', result.effects.created.length);
+      
+      for (const created of result.effects.created) {
+        const objectId = created.reference?.objectId;
+        console.log('Processing created object:', objectId, 'objectType:', created.objectType);
+        
+        // Check objectType if available in effects
+        if (created.objectType) {
+          if (created.objectType.includes('::Room')) {
+            roomId = objectId;
+            console.log('✓ Room created:', roomId);
+          } else if (created.objectType.includes('::Vault')) {
+            vaultId = objectId;
+            console.log('✓ Vault created:', vaultId);
+          }
+        }
+      }
+      
+      // Fallback: if objectType not in effects, we need to fetch and check
+      if (!roomId || !vaultId) {
+        console.log('⚠️ ObjectType not in effects, fetching objects to determine types...');
+        
+        // Wait a bit for blockchain to index the objects
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        for (const created of result.effects.created) {
+          const objectId = created.reference?.objectId;
+          if (!objectId) {
+            console.log('Skipping created object with no objectId');
+            continue;
+          }
+          console.log('Fetching object:', objectId);
+          try {
+            const obj = await suiClient.getObject({
+              id: objectId,
+              options: { showType: true }
+            });
+            console.log('Fetched object result:', obj.data?.objectId, obj.data?.type);
+            const objType = obj.data?.type || '';
+            if (objType.includes('::Room')) {
+              roomId = objectId;
+              console.log('✓ Room created (fetched):', roomId);
+            } else if (objType.includes('::Vault')) {
+              vaultId = objectId;
+              console.log('✓ Vault created (fetched):', vaultId);
+            }
+          } catch (err: any) {
+            console.error('Failed to fetch object:', objectId, err.message);
+          }
+        }
+      }
     } else {
       console.error('⚠️ Expected 2 created objects (Room + Vault), got:', result.effects?.created?.length);
+      console.log('Effects:', JSON.stringify(result.effects, null, 2));
     }
 
     // Save room to store
@@ -369,6 +420,116 @@ router.post('/fund-reward', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Fund reward error:', error);
     res.status(500).json({ error: error.message || 'Failed to fund reward pool' });
+  }
+});
+
+/**
+ * GET /room/:id/participants
+ * Get room participants by querying PlayerJoined events
+ */
+router.get('/:id/participants', async (req: Request, res: Response) => {
+  try {
+    const roomId = req.params.id;
+
+    if (!roomId) {
+      return res.status(400).json({ error: 'Room ID required' });
+    }
+
+    // Query events for this room
+    const events = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280'}::money_race::PlayerJoined`
+      },
+      limit: 50,
+    });
+
+    // Filter events for this specific room and extract participant data
+    const participants = events.data
+      .filter((event: any) => {
+        const parsedJson = event.parsedJson as any;
+        return parsedJson?.room_id === roomId;
+      })
+      .map((event: any) => {
+        const parsedJson = event.parsedJson as any;
+        return {
+          address: parsedJson.player,
+          playerPositionId: parsedJson.player_position_id,
+          amount: parseInt(parsedJson.amount) || 0,
+          joinedAt: event.timestampMs,
+        };
+      });
+
+    res.json({
+      success: true,
+      participants,
+      count: participants.length,
+    });
+  } catch (error: any) {
+    console.error('Get participants error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get participants' });
+  }
+});
+
+/**
+ * GET /room/:id/history
+ * Get room transaction history (joins, deposits, claims)
+ */
+router.get('/:id/history', async (req: Request, res: Response) => {
+  try {
+    const roomId = req.params.id;
+    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
+
+    if (!roomId) {
+      return res.status(400).json({ error: 'Room ID required' });
+    }
+
+    // Query all relevant events
+    const [joinEvents, depositEvents] = await Promise.all([
+      suiClient.queryEvents({
+        query: { MoveEventType: `${packageId}::money_race::PlayerJoined` },
+        limit: 100,
+      }),
+      suiClient.queryEvents({
+        query: { MoveEventType: `${packageId}::money_race::DepositMade` },
+        limit: 100,
+      }),
+    ]);
+
+    // Process join events
+    const joins = joinEvents.data
+      .filter((event: any) => event.parsedJson?.room_id === roomId)
+      .map((event: any) => ({
+        type: 'join',
+        player: event.parsedJson.player,
+        amount: parseInt(event.parsedJson.amount) || 0,
+        timestamp: parseInt(event.timestampMs),
+        txDigest: event.id.txDigest,
+      }));
+
+    // Process deposit events
+    const deposits = depositEvents.data
+      .filter((event: any) => event.parsedJson?.room_id === roomId)
+      .map((event: any) => ({
+        type: 'deposit',
+        player: event.parsedJson.player,
+        amount: parseInt(event.parsedJson.amount) || 0,
+        period: parseInt(event.parsedJson.period) || 0,
+        totalDeposits: parseInt(event.parsedJson.total_deposits) || 0,
+        timestamp: parseInt(event.timestampMs),
+        txDigest: event.id.txDigest,
+      }));
+
+    // Combine and sort by timestamp (newest first)
+    const history = [...joins, ...deposits].sort((a, b) => b.timestamp - a.timestamp);
+
+    res.json({
+      success: true,
+      history,
+      count: history.length,
+    });
+  } catch (error: any) {
+    console.error('Get history error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get history' });
   }
 });
 
