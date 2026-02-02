@@ -425,39 +425,86 @@ router.post('/fund-reward', async (req: Request, res: Response) => {
 
 /**
  * GET /room/:id/participants
- * Get room participants by querying PlayerJoined events
+ * Get room participants by querying PlayerJoined and DepositMade events
  */
 router.get('/:id/participants', async (req: Request, res: Response) => {
   try {
     const roomId = req.params.id;
+    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
 
     if (!roomId) {
       return res.status(400).json({ error: 'Room ID required' });
     }
 
-    // Query events for this room
-    const events = await suiClient.queryEvents({
+    // Query PlayerJoined events for this room
+    const joinEvents = await suiClient.queryEvents({
       query: {
-        MoveEventType: `${process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280'}::money_race::PlayerJoined`
+        MoveEventType: `${packageId}::money_race::PlayerJoined`
       },
       limit: 50,
     });
 
-    // Filter events for this specific room and extract participant data
-    const participants = events.data
+    // Query DepositMade events for this room
+    const depositEvents = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${packageId}::money_race::DepositMade`
+      },
+      limit: 100,
+    });
+
+    // Build participant map from join events
+    const participantMap = new Map<string, {
+      address: string;
+      playerPositionId: string;
+      totalDeposit: number;
+      depositsCount: number;
+      joinedAt: string;
+    }>();
+
+    // Process join events
+    joinEvents.data
       .filter((event: any) => {
         const parsedJson = event.parsedJson as any;
         return parsedJson?.room_id === roomId;
       })
-      .map((event: any) => {
+      .forEach((event: any) => {
         const parsedJson = event.parsedJson as any;
-        return {
-          address: parsedJson.player,
+        const player = parsedJson.player;
+        participantMap.set(player, {
+          address: player,
           playerPositionId: parsedJson.player_position_id,
-          amount: parseInt(parsedJson.amount) || 0,
+          totalDeposit: parseInt(parsedJson.amount) || 0,
+          depositsCount: 1, // Initial join counts as 1
           joinedAt: event.timestampMs,
-        };
+        });
       });
+
+    // Add deposits from DepositMade events
+    depositEvents.data
+      .filter((event: any) => {
+        const parsedJson = event.parsedJson as any;
+        return parsedJson?.room_id === roomId;
+      })
+      .forEach((event: any) => {
+        const parsedJson = event.parsedJson as any;
+        const player = parsedJson.player;
+        const amount = parseInt(parsedJson.amount) || 0;
+        
+        if (participantMap.has(player)) {
+          const existing = participantMap.get(player)!;
+          existing.totalDeposit += amount;
+          existing.depositsCount += 1;
+        }
+      });
+
+    // Convert map to array
+    const participants = Array.from(participantMap.values()).map(p => ({
+      address: p.address,
+      playerPositionId: p.playerPositionId,
+      amount: p.totalDeposit, // Total including all deposits
+      depositsCount: p.depositsCount,
+      joinedAt: p.joinedAt,
+    }));
 
     res.json({
       success: true,
