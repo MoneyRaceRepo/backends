@@ -1,8 +1,28 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { relayerService } from '../services/relayer.service.js';
+import { roomStoreService } from '../services/room-store.service.js';
 
 const router = Router();
+
+/**
+ * GET /room
+ * List all rooms
+ */
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const allRooms = await roomStoreService.getAllRooms();
+
+    res.json({
+      success: true,
+      rooms: allRooms,
+      count: allRooms.length,
+    });
+  } catch (error: any) {
+    console.error('List rooms error:', error);
+    res.status(500).json({ error: error.message || 'Failed to list rooms' });
+  }
+});
 
 /**
  * POST /room/create
@@ -26,10 +46,50 @@ router.post('/create', async (req: Request, res: Response) => {
       periodLengthMs: parseInt(periodLengthMs),
     });
 
+    // Extract created room ID from transaction effects
+    let roomId: string | undefined;
+    let vaultId: string | undefined;
+
+    // Extract from effects.created array
+    // The smart contract creates Room first, then Vault
+    if (result.effects?.created && result.effects.created.length >= 2) {
+      roomId = result.effects.created[0].reference.objectId;
+      vaultId = result.effects.created[1].reference.objectId;
+      console.log('✓ Room created:', roomId);
+      console.log('✓ Vault created:', vaultId);
+    } else {
+      console.error('⚠️ Expected 2 created objects (Room + Vault), got:', result.effects?.created?.length);
+    }
+
+    // Save room to store
+    if (roomId) {
+      const roomData: any = {
+        roomId,
+        creatorAddress: '(gasless)',
+        totalPeriods: parseInt(totalPeriods),
+        depositAmount: parseInt(depositAmount),
+        strategyId: parseInt(strategyId),
+        startTimeMs: parseInt(startTimeMs),
+        periodLengthMs: parseInt(periodLengthMs),
+        createdAt: Date.now(),
+        transactionDigest: result.digest,
+      };
+
+      if (vaultId) {
+        roomData.vaultId = vaultId;
+      }
+
+      await roomStoreService.addRoom(roomData);
+
+      console.log('Room stored:', { roomId, vaultId });
+    }
+
     res.json({
       success: result.success,
       digest: result.digest,
       effects: result.effects,
+      roomId,
+      vaultId,
     });
   } catch (error: any) {
     console.error('Create room error:', error);
@@ -159,8 +219,21 @@ router.get('/:id', async (req: Request, res: Response) => {
   try {
     const id = req.params.id;
 
+    console.log('GET /room/:id - Request received:', { id });
+
     if (!id || Array.isArray(id)) {
-      return res.status(400).json({ error: 'Room ID required' });
+      return res.status(400).json({
+        error: 'Room ID required',
+        hint: 'Please provide a valid Sui object ID (e.g., 0x123abc...)'
+      });
+    }
+
+    // Validasi format dasar
+    if (id.length < 10) {
+      return res.status(400).json({
+        error: 'Invalid Room ID format',
+        hint: 'Room ID should be a valid Sui object ID (minimum 10 characters)'
+      });
     }
 
     const roomData = await relayerService.getRoomData(id);
@@ -171,7 +244,10 @@ router.get('/:id', async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error('Get room error:', error);
-    res.status(404).json({ error: error.message || 'Room not found' });
+    res.status(404).json({
+      error: error.message || 'Room not found',
+      hint: 'Make sure the room has been created on the blockchain first'
+    });
   }
 });
 

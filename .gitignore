@@ -25,3 +25,9 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# SQLite database
+data/*.db
+data/*.db-*
+
+/src/generated/prisma

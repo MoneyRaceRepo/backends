@@ -205,15 +205,42 @@ export class RelayerService {
    */
   async getRoomData(roomId: string): Promise<any> {
     try {
+      // Validasi format Room ID
+      if (!roomId || typeof roomId !== 'string') {
+        throw new Error('Invalid room ID format');
+      }
+
+      // Pastikan Room ID memiliki prefix 0x
+      const normalizedRoomId = roomId.startsWith('0x') ? roomId : `0x${roomId}`;
+
+      console.log('Fetching room data for ID:', normalizedRoomId);
+
       const object = await suiClient.getObject({
-        id: roomId,
-        options: { showContent: true },
+        id: normalizedRoomId,
+        options: {
+          showContent: true,
+          showOwner: true,
+          showType: true,
+        },
+      });
+
+      if (!object.data) {
+        throw new Error(`Room object not found for ID: ${normalizedRoomId}`);
+      }
+
+      console.log('Room data fetched successfully:', {
+        objectId: object.data.objectId,
+        type: object.data.type,
       });
 
       return object.data?.content;
-    } catch (error) {
-      console.error('Failed to fetch room data:', error);
-      throw new Error('Room not found');
+    } catch (error: any) {
+      console.error('Failed to fetch room data:', {
+        roomId,
+        error: error.message,
+        code: error.code,
+      });
+      throw new Error(`Room not found: ${error.message}`);
     }
   }
 

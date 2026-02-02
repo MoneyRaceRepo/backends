@@ -1,0 +1,29 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Room {
+  id                  String   @id @default(cuid())
+  roomId              String   @unique
+  vaultId             String?
+  creatorAddress      String
+  totalPeriods        Int
+  depositAmount       BigInt
+  strategyId          Int
+  startTimeMs         BigInt
+  periodLengthMs      BigInt
+  transactionDigest   String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([createdAt(sort: Desc)])
+  @@index([creatorAddress])
+  @@map("rooms")
+}
