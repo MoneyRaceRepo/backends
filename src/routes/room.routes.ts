@@ -2,8 +2,58 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { relayerService } from '../services/relayer.service.js';
 import { roomStoreService } from '../services/room-store.service.js';
+import { sponsorKeypair } from '../sui/sponsor.js';
 
 const router = Router();
+
+/**
+ * GET /room/sponsor
+ * Get sponsor address for building sponsored transactions
+ */
+router.get('/sponsor', async (req: Request, res: Response) => {
+  try {
+    const sponsorAddress = sponsorKeypair.toSuiAddress();
+    res.json({
+      success: true,
+      sponsorAddress,
+    });
+  } catch (error: any) {
+    console.error('Get sponsor error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get sponsor' });
+  }
+});
+
+/**
+ * POST /room/execute-sponsored
+ * Execute a sponsored transaction (user signs, backend pays gas)
+ */
+router.post('/execute-sponsored', async (req: Request, res: Response) => {
+  try {
+    const { txBytes, userSignature } = req.body;
+
+    if (!txBytes || !userSignature) {
+      return res.status(400).json({ error: 'Missing txBytes or userSignature' });
+    }
+
+    console.log('Executing sponsored transaction...');
+    console.log('txBytes length:', txBytes.length);
+    console.log('userSignature:', userSignature.substring(0, 50) + '...');
+
+    const result = await relayerService.executeSponsoredTxWithUserSignature(
+      txBytes,
+      userSignature
+    );
+
+    res.json({
+      success: result.success,
+      digest: result.digest,
+      effects: result.effects,
+    });
+  } catch (error: any) {
+    console.error('Execute sponsored error:', error);
+    res.status(500).json({ error: error.message || 'Failed to execute sponsored transaction' });
+  }
+});
 
 /**
  * GET /room
@@ -82,6 +132,18 @@ router.post('/create', async (req: Request, res: Response) => {
       await roomStoreService.addRoom(roomData);
 
       console.log('Room stored:', { roomId, vaultId });
+
+      // Auto-start the room so users can join immediately
+      // Add delay to ensure object is indexed on blockchain
+      try {
+        console.log('Auto-starting room in 3 seconds...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        const startResult = await relayerService.startRoom(roomId);
+        console.log('✓ Room auto-started:', startResult.digest);
+      } catch (startError: any) {
+        console.error('⚠️ Failed to auto-start room:', startError.message);
+        // Continue anyway - room can be started manually later
+      }
     }
 
     res.json({
@@ -123,23 +185,20 @@ router.post('/start', async (req: Request, res: Response) => {
 
 /**
  * POST /room/join
- * Join a room
+ * Join a room (with user signature for sponsored transaction)
  */
 router.post('/join', async (req: Request, res: Response) => {
   try {
-    const { roomId, vaultId, coinObjectId, clockId, userAddress } = req.body;
+    const { txBytes, userSignature } = req.body;
 
-    if (!roomId || !vaultId || !coinObjectId || !clockId || !userAddress) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!txBytes || !userSignature) {
+      return res.status(400).json({ error: 'Missing txBytes or userSignature' });
     }
 
-    const result = await relayerService.joinRoom({
-      roomId,
-      vaultId,
-      coinObjectId,
-      clockId,
-      userAddress,
-    });
+    const result = await relayerService.executeSponsoredTxWithUserSignature(
+      txBytes,
+      userSignature
+    );
 
     res.json({
       success: result.success,
@@ -154,23 +213,20 @@ router.post('/join', async (req: Request, res: Response) => {
 
 /**
  * POST /room/deposit
- * Make a deposit
+ * Make a deposit (with user signature for sponsored transaction)
  */
 router.post('/deposit', async (req: Request, res: Response) => {
   try {
-    const { roomId, vaultId, playerPositionId, coinObjectId, clockId } = req.body;
+    const { txBytes, userSignature } = req.body;
 
-    if (!roomId || !vaultId || !playerPositionId || !coinObjectId || !clockId) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!txBytes || !userSignature) {
+      return res.status(400).json({ error: 'Missing txBytes or userSignature' });
     }
 
-    const result = await relayerService.deposit({
-      roomId,
-      vaultId,
-      playerPositionId,
-      coinObjectId,
-      clockId,
-    });
+    const result = await relayerService.executeSponsoredTxWithUserSignature(
+      txBytes,
+      userSignature
+    );
 
     res.json({
       success: result.success,
