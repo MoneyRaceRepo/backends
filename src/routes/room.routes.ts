@@ -324,21 +324,20 @@ router.post('/deposit', async (req: Request, res: Response) => {
 
 /**
  * POST /room/claim
- * Claim rewards
+ * Claim rewards (with user signature - since PlayerPosition is owned by user)
  */
 router.post('/claim', async (req: Request, res: Response) => {
   try {
-    const { roomId, vaultId, playerPositionId } = req.body;
+    const { txBytes, userSignature } = req.body;
 
-    if (!roomId || !vaultId || !playerPositionId) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    if (!txBytes || !userSignature) {
+      return res.status(400).json({ error: 'Missing txBytes or userSignature' });
     }
 
-    const result = await relayerService.claimAll({
-      roomId,
-      vaultId,
-      playerPositionId,
-    });
+    const result = await relayerService.executeSponsoredTxWithUserSignature(
+      txBytes,
+      userSignature
+    );
 
     res.json({
       success: result.success,
