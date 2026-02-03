@@ -16,6 +16,7 @@
   "license": "ISC",
   "dependencies": {
     "@mysten/sui.js": "^0.54.1",
+    "@noble/hashes": "^2.0.1",
     "@prisma/client": "^6.19.2",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jsonwebtoken": "^9.0.10",

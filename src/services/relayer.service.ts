@@ -1,8 +1,10 @@
 import { TransactionBlock } from '@mysten/sui.js/transactions';
+import { bcs } from '@mysten/sui.js/bcs';
 import { suiClient } from '../sui/client.js';
 import { sponsorKeypair } from '../sui/sponsor.js';
 import { config } from '../config/index.js';
 import type { TxResponse } from '../types/index.js';
+import { keccak_256 } from '@noble/hashes/sha3.js';
 
 /**
  * Transaction Relayer Service
@@ -107,8 +109,20 @@ export class RelayerService {
     strategyId: number;
     startTimeMs: number;
     periodLengthMs: number;
+    isPrivate: boolean;
+    password: string;
   }): Promise<TxResponse> {
     const tx = new TransactionBlock();
+
+    // Hash password if private room, otherwise use empty vector
+    let passwordBytes: Uint8Array;
+    if (params.isPrivate && params.password) {
+      // Hash the password using keccak256
+      const hash = keccak_256(new TextEncoder().encode(params.password));
+      passwordBytes = hash; // keccak_256 already returns Uint8Array
+    } else {
+      passwordBytes = new Uint8Array(0); // Empty Uint8Array for public rooms
+    }
 
     tx.moveCall({
       target: `${config.packageId}::money_race::create_room`,
@@ -118,6 +132,8 @@ export class RelayerService {
         tx.pure(params.strategyId, 'u8'),
         tx.pure(params.startTimeMs, 'u64'),
         tx.pure(params.periodLengthMs, 'u64'),
+        tx.pure(params.isPrivate, 'bool'),
+        tx.pure(bcs.vector(bcs.u8()).serialize(passwordBytes)),
       ],
     });
 
@@ -320,7 +336,7 @@ export class RelayerService {
   async mintUSDC(recipient: string, amount: number): Promise<TxResponse> {
     const tx = new TransactionBlock();
 
-    const USDC_FAUCET_ID = config.faucetId || '0x5099b301d2b96f1a21a9ed52d6825d49704052060cf2bb5fa33a280630cbcebd';
+    const USDC_FAUCET_ID = config.faucetId || '0x6f101a733c447a22520807012911552c061a3f63a47129e949f5c2af448cc525';
     const CLOCK_ID = '0x6';
 
     tx.moveCall({
@@ -369,7 +385,7 @@ export class RelayerService {
     lastMintTime: number | null;
   }> {
     try {
-      const USDC_FAUCET_ID = config.faucetId || '0x5099b301d2b96f1a21a9ed52d6825d49704052060cf2bb5fa33a280630cbcebd';
+      const USDC_FAUCET_ID = config.faucetId || '0x6f101a733c447a22520807012911552c061a3f63a47129e949f5c2af448cc525';
       const CLOCK_ID = '0x6';
 
       // Get faucet object to check cooldown

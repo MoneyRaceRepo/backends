@@ -4,6 +4,7 @@ import { relayerService } from '../services/relayer.service.js';
 import { roomStoreService } from '../services/room-store.service.js';
 import { sponsorKeypair } from '../sui/sponsor.js';
 import { suiClient } from '../sui/client.js';
+import { keccak_256 } from '@noble/hashes/sha3.js';
 
 const router = Router();
 
@@ -58,16 +59,23 @@ router.post('/execute-sponsored', async (req: Request, res: Response) => {
 
 /**
  * GET /room
- * List all rooms
+ * List all rooms (only public rooms are returned by default)
+ * Query param: includePrivate=true to include private rooms
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
     const allRooms = await roomStoreService.getAllRooms();
 
+    // Filter out private rooms by default (unless explicitly requested)
+    const includePrivate = req.query.includePrivate === 'true';
+    const filteredRooms = includePrivate
+      ? allRooms
+      : allRooms.filter(room => !room.isPrivate);
+
     res.json({
       success: true,
-      rooms: allRooms,
-      count: allRooms.length,
+      rooms: filteredRooms,
+      count: filteredRooms.length,
     });
   } catch (error: any) {
     console.error('List rooms error:', error);
@@ -81,11 +89,22 @@ router.get('/', async (req: Request, res: Response) => {
  */
 router.post('/create', async (req: Request, res: Response) => {
   try {
-    const { totalPeriods, depositAmount, strategyId, startTimeMs, periodLengthMs } = req.body;
+    const { totalPeriods, depositAmount, strategyId, startTimeMs, periodLengthMs, isPrivate } = req.body;
 
     // Validation
     if (!totalPeriods || !depositAmount || strategyId === undefined || !startTimeMs || !periodLengthMs) {
       return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Generate random password for private rooms
+    let generatedPassword = '';
+    if (isPrivate === true) {
+      // Generate 8-character random password (alphanumeric)
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+      for (let i = 0; i < 8; i++) {
+        generatedPassword += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      console.log('Generated password for private room:', generatedPassword);
     }
 
     // Create room transaction
@@ -95,6 +114,8 @@ router.post('/create', async (req: Request, res: Response) => {
       strategyId: parseInt(strategyId),
       startTimeMs: parseInt(startTimeMs),
       periodLengthMs: parseInt(periodLengthMs),
+      isPrivate: isPrivate === true,
+      password: generatedPassword,
     });
 
     // Extract created room ID from transaction effects
@@ -164,12 +185,21 @@ router.post('/create', async (req: Request, res: Response) => {
 
     // Save room to store
     if (roomId) {
+      // Compute password hash for storage (if private room)
+      let passwordHashHex: string | null = null;
+      if (isPrivate === true && generatedPassword) {
+        const hash = keccak_256(new TextEncoder().encode(generatedPassword));
+        passwordHashHex = Buffer.from(hash).toString('hex');
+      }
+
       const roomData: any = {
         roomId,
         creatorAddress: '(gasless)',
         totalPeriods: parseInt(totalPeriods),
         depositAmount: parseInt(depositAmount),
         strategyId: parseInt(strategyId),
+        isPrivate: isPrivate === true,
+        passwordHash: passwordHashHex,
         startTimeMs: parseInt(startTimeMs),
         periodLengthMs: parseInt(periodLengthMs),
         createdAt: Date.now(),
@@ -203,6 +233,8 @@ router.post('/create', async (req: Request, res: Response) => {
       effects: result.effects,
       roomId,
       vaultId,
+      // Return password only for private rooms (user must save it!)
+      password: isPrivate === true ? generatedPassword : undefined,
     });
   } catch (error: any) {
     console.error('Create room error:', error);
@@ -316,6 +348,131 @@ router.post('/claim', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Claim error:', error);
     res.status(500).json({ error: error.message || 'Failed to claim' });
+  }
+});
+
+/**
+ * GET /room/my-rooms/:userAddress
+ * Get all rooms that a user has joined
+ */
+router.get('/my-rooms/:userAddress', async (req: Request, res: Response) => {
+  try {
+    const userAddress = req.params.userAddress;
+    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
+
+    if (!userAddress) {
+      return res.status(400).json({ error: 'User address required' });
+    }
+
+    console.log('Fetching rooms for user:', userAddress);
+
+    // Query PlayerJoined events for this user
+    const joinEvents = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${packageId}::money_race::PlayerJoined`
+      },
+      limit: 100,
+    });
+
+    // Filter events for this specific user and extract room info
+    const userRoomIds = new Set<string>();
+    const roomMap = new Map<string, {
+      roomId: string;
+      playerPositionId: string;
+      joinedAt: string;
+      initialDeposit: number;
+    }>();
+
+    joinEvents.data
+      .filter((event: any) => {
+        const parsedJson = event.parsedJson as any;
+        return parsedJson?.player === userAddress;
+      })
+      .forEach((event: any) => {
+        const parsedJson = event.parsedJson as any;
+        const roomId = parsedJson.room_id;
+        userRoomIds.add(roomId);
+        roomMap.set(roomId, {
+          roomId,
+          playerPositionId: parsedJson.player_position_id,
+          joinedAt: event.timestampMs,
+          initialDeposit: parseInt(parsedJson.amount) || 0,
+        });
+      });
+
+    // Fetch room details from database for each room
+    const roomsWithDetails = await Promise.all(
+      Array.from(userRoomIds).map(async (roomId) => {
+        const dbRoom = await roomStoreService.getRoom(roomId);
+        const joinInfo = roomMap.get(roomId);
+
+        if (!dbRoom) {
+          return null;
+        }
+
+        return {
+          ...dbRoom,
+          playerPositionId: joinInfo?.playerPositionId,
+          joinedAt: joinInfo?.joinedAt,
+          initialDeposit: joinInfo?.initialDeposit,
+        };
+      })
+    );
+
+    // Filter out null entries (rooms not found in DB)
+    const validRooms = roomsWithDetails.filter(room => room !== null);
+
+    console.log(`✓ Found ${validRooms.length} rooms for user ${userAddress}`);
+
+    res.json({
+      success: true,
+      rooms: validRooms,
+      count: validRooms.length,
+    });
+  } catch (error: any) {
+    console.error('Get my rooms error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get user rooms' });
+  }
+});
+
+/**
+ * POST /room/find-by-password
+ * Find a private room by password
+ */
+router.post('/find-by-password', async (req: Request, res: Response) => {
+  try {
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ error: 'Password required' });
+    }
+
+    // Hash the password
+    const hash = keccak_256(new TextEncoder().encode(password));
+    const hashHex = Buffer.from(hash).toString('hex');
+
+    console.log('Searching for room with password hash:', hashHex);
+
+    // Find room by password hash
+    const room = await roomStoreService.findByPasswordHash(hashHex);
+
+    if (!room) {
+      return res.status(404).json({
+        error: 'No room found with this password',
+        hint: 'Please check the password and try again'
+      });
+    }
+
+    console.log('✓ Found room:', room.roomId);
+
+    res.json({
+      success: true,
+      roomId: room.roomId,
+      vaultId: room.vaultId,
+    });
+  } catch (error: any) {
+    console.error('Find by password error:', error);
+    res.status(500).json({ error: error.message || 'Failed to find room' });
   }
 });
 
@@ -577,6 +734,146 @@ router.get('/:id/history', async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error('Get history error:', error);
     res.status(500).json({ error: error.message || 'Failed to get history' });
+  }
+});
+
+/**
+ * GET /room/user/:address/joined
+ * Get all rooms that a user has joined by querying PlayerJoined events
+ */
+router.get('/user/:address/joined', async (req: Request, res: Response) => {
+  try {
+    const userAddress = req.params.address;
+    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
+
+    if (!userAddress) {
+      return res.status(400).json({ error: 'User address required' });
+    }
+
+    console.log('Fetching rooms joined by user:', userAddress);
+
+    // Query PlayerJoined events
+    const joinEvents = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${packageId}::money_race::PlayerJoined`
+      },
+      limit: 100,
+    });
+
+    // Query DepositMade events to calculate total deposits
+    const depositEvents = await suiClient.queryEvents({
+      query: {
+        MoveEventType: `${packageId}::money_race::DepositMade`
+      },
+      limit: 200,
+    });
+
+    // Filter join events for this user and extract room info
+    const userJoinEvents = joinEvents.data.filter((event: any) => {
+      const parsedJson = event.parsedJson as any;
+      return parsedJson?.player?.toLowerCase() === userAddress.toLowerCase();
+    });
+
+    // Build rooms map with user's data
+    const roomsMap = new Map<string, {
+      roomId: string;
+      playerPositionId: string;
+      joinedAt: number;
+      initialDeposit: number;
+      totalDeposit: number;
+      depositsCount: number;
+    }>();
+
+    // Process user's join events
+    for (const event of userJoinEvents) {
+      const parsedJson = event.parsedJson as any;
+      const roomId = parsedJson.room_id;
+      
+      roomsMap.set(roomId, {
+        roomId,
+        playerPositionId: parsedJson.player_position_id,
+        joinedAt: parseInt(event.timestampMs),
+        initialDeposit: parseInt(parsedJson.amount) || 0,
+        totalDeposit: parseInt(parsedJson.amount) || 0,
+        depositsCount: 1,
+      });
+    }
+
+    // Add deposits to rooms
+    for (const event of depositEvents.data) {
+      const parsedJson = event.parsedJson as any;
+      if (parsedJson?.player?.toLowerCase() === userAddress.toLowerCase()) {
+        const roomId = parsedJson.room_id;
+        if (roomsMap.has(roomId)) {
+          const room = roomsMap.get(roomId)!;
+          room.totalDeposit += parseInt(parsedJson.amount) || 0;
+          room.depositsCount += 1;
+        }
+      }
+    }
+
+    // Fetch room details from database for each room
+    const roomsWithDetails = await Promise.all(
+      Array.from(roomsMap.values()).map(async (userRoom) => {
+        try {
+          const dbRoom = await roomStoreService.getRoom(userRoom.roomId);
+          
+          // Try to get blockchain data too
+          let blockchainData: any = {};
+          try {
+            const roomContent = await relayerService.getRoomData(userRoom.roomId);
+            if (roomContent?.fields) {
+              blockchainData = roomContent.fields;
+            }
+          } catch (e) {
+            console.log('Could not fetch blockchain data for room:', userRoom.roomId);
+          }
+
+          const USDC_DECIMALS = 1_000_000;
+
+          return {
+            roomId: userRoom.roomId,
+            vaultId: dbRoom?.vaultId || null,
+            playerPositionId: userRoom.playerPositionId,
+            joinedAt: userRoom.joinedAt,
+            myDeposit: userRoom.totalDeposit / USDC_DECIMALS,
+            depositsCount: userRoom.depositsCount,
+            // Room info from database/blockchain
+            totalPeriods: dbRoom?.totalPeriods || blockchainData.total_periods || 0,
+            depositAmount: (dbRoom?.depositAmount || blockchainData.deposit_amount || 0) / USDC_DECIMALS,
+            strategyId: dbRoom?.strategyId || blockchainData.strategy_id || 0,
+            isPrivate: dbRoom?.isPrivate || false,
+            status: blockchainData.status || 1, // 1 = active by default
+          };
+        } catch (error) {
+          console.error('Error fetching room details:', userRoom.roomId, error);
+          return {
+            roomId: userRoom.roomId,
+            playerPositionId: userRoom.playerPositionId,
+            joinedAt: userRoom.joinedAt,
+            myDeposit: userRoom.totalDeposit / 1_000_000,
+            depositsCount: userRoom.depositsCount,
+            totalPeriods: 0,
+            depositAmount: 0,
+            strategyId: 0,
+            isPrivate: false,
+            status: 1,
+          };
+        }
+      })
+    );
+
+    // Sort by joinedAt (newest first)
+    roomsWithDetails.sort((a, b) => b.joinedAt - a.joinedAt);
+
+    res.json({
+      success: true,
+      rooms: roomsWithDetails,
+      count: roomsWithDetails.length,
+    });
+  } catch (error: any) {
+    console.error('Get user joined rooms error:', error);
+    res.status(500).json({ error: error.message || 'Failed to get user rooms' });
   }
 });
 

@@ -18,6 +18,8 @@ model Room {
   totalPeriods        Int
   depositAmount       BigInt
   strategyId          Int
+  isPrivate           Boolean  @default(false)
+  passwordHash        String?  // Hex string of keccak256 hash for private rooms
   startTimeMs         BigInt
   periodLengthMs      BigInt
   transactionDigest   String
@@ -26,5 +28,6 @@ model Room {
 
   @@index([createdAt(sort: Desc)])
   @@index([creatorAddress])
+  @@index([passwordHash])
   @@map("rooms")
 }

@@ -26,6 +26,8 @@ interface RoomData {
   totalPeriods: number;
   depositAmount: number;
   strategyId: number;
+  isPrivate?: boolean;
+  passwordHash?: string | null;
   startTimeMs: number;
   periodLengthMs: number;
   createdAt: number;
@@ -45,6 +47,8 @@ class RoomStoreService {
         totalPeriods: data.totalPeriods,
         depositAmount: BigInt(data.depositAmount),
         strategyId: data.strategyId,
+        isPrivate: data.isPrivate ?? false,
+        passwordHash: data.passwordHash ?? null,
         startTimeMs: BigInt(data.startTimeMs),
         periodLengthMs: BigInt(data.periodLengthMs),
         transactionDigest: data.transactionDigest,
@@ -56,13 +60,15 @@ class RoomStoreService {
         totalPeriods: data.totalPeriods,
         depositAmount: BigInt(data.depositAmount),
         strategyId: data.strategyId,
+        isPrivate: data.isPrivate ?? false,
+        passwordHash: data.passwordHash ?? null,
         startTimeMs: BigInt(data.startTimeMs),
         periodLengthMs: BigInt(data.periodLengthMs),
         transactionDigest: data.transactionDigest,
       },
     });
 
-    console.log('✓ Room saved to PostgreSQL:', data.roomId);
+    console.log('✓ Room saved to SQLite:', data.roomId);
   }
 
   /**
@@ -80,6 +86,7 @@ class RoomStoreService {
       totalPeriods: room.totalPeriods,
       depositAmount: Number(room.depositAmount),
       strategyId: room.strategyId,
+      isPrivate: room.isPrivate,
       startTimeMs: Number(room.startTimeMs),
       periodLengthMs: Number(room.periodLengthMs),
       createdAt: room.createdAt.getTime(),
@@ -104,6 +111,7 @@ class RoomStoreService {
       totalPeriods: room.totalPeriods,
       depositAmount: Number(room.depositAmount),
       strategyId: room.strategyId,
+      isPrivate: room.isPrivate,
       startTimeMs: Number(room.startTimeMs),
       periodLengthMs: Number(room.periodLengthMs),
       createdAt: room.createdAt.getTime(),
@@ -127,6 +135,7 @@ class RoomStoreService {
       totalPeriods: room.totalPeriods,
       depositAmount: Number(room.depositAmount),
       strategyId: room.strategyId,
+      isPrivate: room.isPrivate,
       startTimeMs: Number(room.startTimeMs),
       periodLengthMs: Number(room.periodLengthMs),
       createdAt: room.createdAt.getTime(),
@@ -149,6 +158,32 @@ class RoomStoreService {
    */
   async getRoomCount(): Promise<number> {
     return await getPrismaClient().room.count();
+  }
+
+  /**
+   * Find room by password hash
+   */
+  async findByPasswordHash(passwordHash: string): Promise<RoomData | undefined> {
+    const room = await getPrismaClient().room.findFirst({
+      where: { passwordHash },
+    });
+
+    if (!room) return undefined;
+
+    return {
+      roomId: room.roomId,
+      vaultId: room.vaultId,
+      creatorAddress: room.creatorAddress,
+      totalPeriods: room.totalPeriods,
+      depositAmount: Number(room.depositAmount),
+      strategyId: room.strategyId,
+      isPrivate: room.isPrivate,
+      passwordHash: room.passwordHash,
+      startTimeMs: Number(room.startTimeMs),
+      periodLengthMs: Number(room.periodLengthMs),
+      createdAt: room.createdAt.getTime(),
+      transactionDigest: room.transactionDigest,
+    };
   }
 
   /**
