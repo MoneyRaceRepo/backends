@@ -21,6 +21,13 @@ export interface AIPrompt {
   duration?: number;
 }
 
+export interface DeFiProtocol {
+  name: string;
+  type: string; // lending, dex, staking, etc
+  apy: string;
+  tvl?: string;
+}
+
 export interface StrategyRecommendation {
   id: number;
   name: string;
@@ -29,6 +36,9 @@ export interface StrategyRecommendation {
   expectedReturn: number; // percentage
   recommended: boolean;
   reasoning?: string;
+  protocols?: DeFiProtocol[]; // Real DeFi protocols on Sui
+  allocation?: { [key: string]: number }; // Allocation percentages
+  suggestedTokens?: string[]; // Token symbols
 }
 
 export interface AIRecommendationResponse {
