@@ -19,7 +19,7 @@ export class RelayerService {
     try {
       // Don't set sender - let sponsor be the signer
       // Input objects owned by user will still work as long as they're passed correctly
-      
+
       // Set gas budget
       tx.setGasBudget(100000000); // 0.1 SUI
 
@@ -68,13 +68,34 @@ export class RelayerService {
         ? Uint8Array.from(Buffer.from(txBytes, 'base64'))
         : txBytes;
 
-      // Sponsor signs the transaction
-      const sponsorSignature = await sponsorKeypair.signTransactionBlock(txBytesArray);
+      // Check if userSignature is already a multi-sig (array format)
+      // Multi-sig format in Sui can be JSON array string like '["sig1", "sig2"]'
+      let finalSignature: string | string[];
 
-      // Execute with both signatures
+      // Try to parse as JSON array
+      let isMultiSig = false;
+      try {
+        const parsed = JSON.parse(userSignature);
+        if (Array.isArray(parsed)) {
+          isMultiSig = true;
+          console.log('⚠️ User signature is already multi-sig, using as-is');
+          finalSignature = parsed;
+        }
+      } catch {
+        // Not JSON, treat as single signature
+      }
+
+      if (!isMultiSig) {
+        // Single signature - add sponsor signature
+        const sponsorSignature = await sponsorKeypair.signTransactionBlock(txBytesArray);
+        finalSignature = [userSignature, sponsorSignature.signature];
+        console.log('✅ Added sponsor signature to single user signature');
+      }
+
+      // Execute with signature(s)
       const result = await suiClient.executeTransactionBlock({
         transactionBlock: txBytesArray,
-        signature: [userSignature, sponsorSignature.signature],
+        signature: finalSignature,
         options: {
           showEffects: true,
           showEvents: true,
@@ -114,26 +135,17 @@ export class RelayerService {
   }): Promise<TxResponse> {
     const tx = new TransactionBlock();
 
-    // Hash password if private room, otherwise use empty vector
-    let passwordBytes: Uint8Array;
-    if (params.isPrivate && params.password) {
-      // Hash the password using keccak256
-      const hash = keccak_256(new TextEncoder().encode(params.password));
-      passwordBytes = hash; // keccak_256 already returns Uint8Array
-    } else {
-      passwordBytes = new Uint8Array(0); // Empty Uint8Array for public rooms
-    }
+    // Note: isPrivate and password are stored in DB only for now
+    // The smart contract create_room doesn't accept these args
 
     tx.moveCall({
-      target: `${config.packageId}::money_race::create_room`,
+      target: `${config.packageId}::money_race_v2::create_room`,
       arguments: [
         tx.pure(params.totalPeriods, 'u64'),
         tx.pure(params.depositAmount, 'u64'),
         tx.pure(params.strategyId, 'u8'),
         tx.pure(params.startTimeMs, 'u64'),
         tx.pure(params.periodLengthMs, 'u64'),
-        tx.pure(params.isPrivate, 'bool'),
-        tx.pure(bcs.vector(bcs.u8()).serialize(passwordBytes)),
       ],
     });
 
@@ -147,7 +159,7 @@ export class RelayerService {
     const tx = new TransactionBlock();
 
     tx.moveCall({
-      target: `${config.packageId}::money_race::start_room`,
+      target: `${config.packageId}::money_race_v2::start_room`,
       arguments: [
         tx.object(config.adminCapId), // AdminCap
         tx.object(roomId),
@@ -170,7 +182,7 @@ export class RelayerService {
     const tx = new TransactionBlock();
 
     tx.moveCall({
-      target: `${config.packageId}::money_race::join_room_for`,
+      target: `${config.packageId}::money_race_v2::join_room_for`,
       arguments: [
         tx.object(params.roomId),
         tx.object(params.vaultId),
@@ -196,7 +208,7 @@ export class RelayerService {
     const tx = new TransactionBlock();
 
     tx.moveCall({
-      target: `${config.packageId}::money_race::deposit`,
+      target: `${config.packageId}::money_race_v2::deposit`,
       arguments: [
         tx.object(params.roomId),
         tx.object(params.vaultId),
@@ -216,7 +228,7 @@ export class RelayerService {
     const tx = new TransactionBlock();
 
     tx.moveCall({
-      target: `${config.packageId}::money_race::finalize_room`,
+      target: `${config.packageId}::money_race_v2::finalize_room`,
       arguments: [
         tx.object(config.adminCapId),
         tx.object(roomId),
@@ -236,7 +248,7 @@ export class RelayerService {
     const tx = new TransactionBlock();
 
     tx.moveCall({
-      target: `${config.packageId}::money_race::fund_reward_pool`,
+      target: `${config.packageId}::money_race_v2::fund_reward_pool`,
       arguments: [
         tx.object(config.adminCapId),
         tx.object(params.vaultId),
@@ -258,7 +270,7 @@ export class RelayerService {
     const tx = new TransactionBlock();
 
     tx.moveCall({
-      target: `${config.packageId}::money_race::claim_all`,
+      target: `${config.packageId}::money_race_v2::claim_all`,
       arguments: [
         tx.object(params.roomId),
         tx.object(params.vaultId),
@@ -272,7 +284,7 @@ export class RelayerService {
   /**
    * Get Room Data
    */
-  async getRoomData(roomId: string): Promise<any> {
+  async getRoomData(roomId: string, vaultId?: string): Promise<any> {
     try {
       // Validasi format Room ID
       if (!roomId || typeof roomId !== 'string') {
@@ -297,12 +309,28 @@ export class RelayerService {
         throw new Error(`Room object not found for ID: ${normalizedRoomId}`);
       }
 
+      let vaultData: any = null;
+      if (vaultId) {
+        try {
+          const vObj = await suiClient.getObject({
+            id: vaultId,
+            options: { showContent: true }
+          });
+          if (vObj.data?.content?.dataType === 'moveObject') {
+            vaultData = vObj.data.content.fields;
+          }
+        } catch (e) {
+          console.error(`Failed to fetch vault data for ${vaultId}`, e);
+        }
+      }
+
       console.log('Room data fetched successfully:', {
         objectId: object.data.objectId,
         type: object.data.type,
+        hasVaultData: !!vaultData
       });
 
-      return object.data?.content;
+      return { ...object.data?.content, vaultData };
     } catch (error: any) {
       console.error('Failed to fetch room data:', {
         roomId,

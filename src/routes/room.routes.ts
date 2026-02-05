@@ -72,10 +72,55 @@ router.get('/', async (req: Request, res: Response) => {
       ? allRooms
       : allRooms.filter(room => !room.isPrivate);
 
+    const USDC_DECIMALS = 1_000_000;
+
+    // Fetch totalDeposit from participant events (sum of all deposits)
+    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
+
+    // Query all PlayerJoined and DepositMade events
+    const [joinEvents, depositEvents] = await Promise.all([
+      suiClient.queryEvents({
+        query: { MoveEventType: `${packageId}::money_race_v2::PlayerJoined` },
+        limit: 50,
+      }),
+      suiClient.queryEvents({
+        query: { MoveEventType: `${packageId}::money_race_v2::DepositMade` },
+        limit: 100,
+      }),
+    ]);
+
+    const roomsWithTotalDeposit = filteredRooms.map((room) => {
+      let totalDeposit = 0;
+
+      // Sum deposits from PlayerJoined events for this room
+      joinEvents.data
+        .filter((event: any) => event.parsedJson?.room_id === room.roomId)
+        .forEach((event: any) => {
+          const amount = parseInt(event.parsedJson?.amount) || 0;
+          totalDeposit += amount;
+        });
+
+      // Sum deposits from DepositMade events for this room
+      depositEvents.data
+        .filter((event: any) => event.parsedJson?.room_id === room.roomId)
+        .forEach((event: any) => {
+          const amount = parseInt(event.parsedJson?.amount) || 0;
+          totalDeposit += amount;
+        });
+
+      // Convert from USDC decimals to regular number
+      totalDeposit = totalDeposit / USDC_DECIMALS;
+
+      return {
+        ...room,
+        totalDeposit, // Sum of all participant deposits
+      };
+    });
+
     res.json({
       success: true,
-      rooms: filteredRooms,
-      count: filteredRooms.length,
+      rooms: roomsWithTotalDeposit,
+      count: roomsWithTotalDeposit.length,
     });
   } catch (error: any) {
     console.error('List rooms error:', error);
@@ -368,7 +413,7 @@ router.get('/my-rooms/:userAddress', async (req: Request, res: Response) => {
     // Query PlayerJoined events for this user
     const joinEvents = await suiClient.queryEvents({
       query: {
-        MoveEventType: `${packageId}::money_race::PlayerJoined`
+        MoveEventType: `${packageId}::money_race_v2::PlayerJoined`
       },
       limit: 100,
     });
@@ -405,16 +450,80 @@ router.get('/my-rooms/:userAddress', async (req: Request, res: Response) => {
         const dbRoom = await roomStoreService.getRoom(roomId);
         const joinInfo = roomMap.get(roomId);
 
+        console.log(`Processing room ${roomId}:`, {
+          hasDbRoom: !!dbRoom,
+          hasJoinInfo: !!joinInfo,
+          dbRoomDepositAmount: dbRoom?.depositAmount,
+          initialDeposit: joinInfo?.initialDeposit,
+        });
+
         if (!dbRoom) {
+          console.log(`⚠️ Room ${roomId} not found in database`);
           return null;
         }
 
-        return {
-          ...dbRoom,
+        // Fetch data from blockchain (Room + Vault)
+        let rewardPool = 0;
+        let totalDeposit = 0;
+        let blockchainDepositAmount = 0;
+        let blockchainTotalPeriods = 0;
+        try {
+          const roomContent = await relayerService.getRoomData(roomId, dbRoom.vaultId || undefined);
+
+          // Extract Room fields from blockchain
+          if (roomContent?.fields) {
+            blockchainDepositAmount = Number(roomContent.fields.deposit_amount || 0);
+            blockchainTotalPeriods = Number(roomContent.fields.total_periods || 0);
+            console.log(`Blockchain Room data:`, { blockchainDepositAmount, blockchainTotalPeriods });
+          }
+
+          // Extract Vault fields
+          if (roomContent?.vaultData) {
+            const rewardBalance = roomContent.vaultData.reward?.fields?.value || roomContent.vaultData.reward || 0;
+            rewardPool = Number(rewardBalance) / 1_000_000;
+
+            const principalBalance = roomContent.vaultData.principal?.fields?.value || roomContent.vaultData.principal || 0;
+            totalDeposit = Number(principalBalance) / 1_000_000;
+          }
+        } catch (e) {
+          console.log(`Failed to fetch blockchain data for my-room ${roomId}:`, e);
+        }
+
+        // Use blockchain data as fallback if DB data is 0 or missing
+        const finalDepositAmount = dbRoom.depositAmount || blockchainDepositAmount;
+        const finalTotalPeriods = dbRoom.totalPeriods || blockchainTotalPeriods;
+
+        // Build response with explicit field names
+        const roomResponse = {
+          roomId: dbRoom.roomId,
+          name: `Savings Room #${dbRoom.roomId.slice(0, 8)}`,
+          vaultId: dbRoom.vaultId,
+          depositAmount: finalDepositAmount, // Fallback to blockchain if DB is 0
+          totalPeriods: finalTotalPeriods,
+          strategyId: dbRoom.strategyId,
+          isPrivate: dbRoom.isPrivate,
+          startTimeMs: dbRoom.startTimeMs,
+          periodLengthMs: dbRoom.periodLengthMs,
+          status: 0, // Assuming active for now
+          // Join-specific data
           playerPositionId: joinInfo?.playerPositionId,
           joinedAt: joinInfo?.joinedAt,
-          initialDeposit: joinInfo?.initialDeposit,
+          initialDeposit: joinInfo?.initialDeposit || 0, // Raw units
+          myDeposit: joinInfo?.initialDeposit || 0, // Alias for frontend compatibility
+          depositsCount: 1, // At least 1 deposit since user joined
+          // Blockchain data (already divided)
+          rewardPool,
+          totalDeposit,
         };
+
+        console.log(`✓ Room ${roomId} data:`, {
+          depositAmount: roomResponse.depositAmount,
+          totalPeriods: roomResponse.totalPeriods,
+          initialDeposit: roomResponse.initialDeposit,
+          myDeposit: roomResponse.myDeposit,
+        });
+
+        return roomResponse;
       })
     );
 
@@ -506,14 +615,78 @@ router.get('/:id', async (req: Request, res: Response) => {
     // Fetch blockchain data
     const roomData = await relayerService.getRoomData(id);
 
+    const USDC_DECIMALS = 1_000_000;
+    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
+
+    // Calculate totalDeposit from participant events (sum of all deposits)
+    let totalDeposit = 0;
+    let rewardPool = 0;
+
+    try {
+      // Query PlayerJoined and DepositMade events for this room
+      const [joinEvents, depositEvents] = await Promise.all([
+        suiClient.queryEvents({
+          query: { MoveEventType: `${packageId}::money_race_v2::PlayerJoined` },
+          limit: 50,
+        }),
+        suiClient.queryEvents({
+          query: { MoveEventType: `${packageId}::money_race_v2::DepositMade` },
+          limit: 100,
+        }),
+      ]);
+
+      // Sum deposits from PlayerJoined events for this room
+      joinEvents.data
+        .filter((event: any) => event.parsedJson?.room_id === id)
+        .forEach((event: any) => {
+          const amount = parseInt(event.parsedJson?.amount) || 0;
+          totalDeposit += amount;
+        });
+
+      // Sum deposits from DepositMade events for this room
+      depositEvents.data
+        .filter((event: any) => event.parsedJson?.room_id === id)
+        .forEach((event: any) => {
+          const amount = parseInt(event.parsedJson?.amount) || 0;
+          totalDeposit += amount;
+        });
+
+      // Convert from USDC decimals
+      totalDeposit = totalDeposit / USDC_DECIMALS;
+    } catch (error) {
+      console.log(`Could not fetch deposit events for room ${id}:`, error);
+      totalDeposit = 0;
+    }
+
+    // Fetch rewardPool from vault if vaultId exists
+    if (dbRoom?.vaultId) {
+      try {
+        const vaultObj = await suiClient.getObject({
+          id: dbRoom.vaultId,
+          options: { showContent: true },
+        });
+
+        if (vaultObj.data?.content && 'fields' in vaultObj.data.content) {
+          const vaultFields = vaultObj.data.content.fields as any;
+          const rewardBalance = vaultFields.reward?.fields?.value || vaultFields.reward || 0;
+          rewardPool = Number(rewardBalance) / USDC_DECIMALS;
+        }
+      } catch (error) {
+        console.log(`Could not fetch vault data for room ${id}:`, error);
+        rewardPool = 0;
+      }
+    }
+
     // Merge database data with blockchain data
     const mergedData = {
       ...roomData,
       vaultId: dbRoom?.vaultId || null,
       transactionDigest: dbRoom?.transactionDigest || null,
+      totalDeposit, // Add totalDeposit from vault
+      rewardPool, // Add rewardPool from vault
     };
 
-    console.log('✓ Room data merged:', { roomId: id, vaultId: mergedData.vaultId });
+    console.log('✓ Room data merged:', { roomId: id, vaultId: mergedData.vaultId, totalDeposit, rewardPool });
 
     res.json({
       success: true,
@@ -595,7 +768,7 @@ router.get('/:id/participants', async (req: Request, res: Response) => {
     // Query PlayerJoined events for this room
     const joinEvents = await suiClient.queryEvents({
       query: {
-        MoveEventType: `${packageId}::money_race::PlayerJoined`
+        MoveEventType: `${packageId}::money_race_v2::PlayerJoined`
       },
       limit: 50,
     });
@@ -603,7 +776,7 @@ router.get('/:id/participants', async (req: Request, res: Response) => {
     // Query DepositMade events for this room
     const depositEvents = await suiClient.queryEvents({
       query: {
-        MoveEventType: `${packageId}::money_race::DepositMade`
+        MoveEventType: `${packageId}::money_race_v2::DepositMade`
       },
       limit: 100,
     });
@@ -689,11 +862,11 @@ router.get('/:id/history', async (req: Request, res: Response) => {
     // Query all relevant events
     const [joinEvents, depositEvents] = await Promise.all([
       suiClient.queryEvents({
-        query: { MoveEventType: `${packageId}::money_race::PlayerJoined` },
+        query: { MoveEventType: `${packageId}::money_race_v2::PlayerJoined` },
         limit: 100,
       }),
       suiClient.queryEvents({
-        query: { MoveEventType: `${packageId}::money_race::DepositMade` },
+        query: { MoveEventType: `${packageId}::money_race_v2::DepositMade` },
         limit: 100,
       }),
     ]);
@@ -756,7 +929,7 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
     try {
       joinEvents = await suiClient.queryEvents({
         query: {
-          MoveEventType: `${packageId}::money_race::PlayerJoined`
+          MoveEventType: `${packageId}::money_race_v2::PlayerJoined`
         },
         limit: 100,
         order: 'descending'
@@ -772,7 +945,7 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
     try {
       depositEvents = await suiClient.queryEvents({
         query: {
-          MoveEventType: `${packageId}::money_race::DepositMade`
+          MoveEventType: `${packageId}::money_race_v2::DepositMade`
         },
         limit: 200,
         order: 'descending'
@@ -854,10 +1027,15 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
 
         // Fetch blockchain data robustly
         let blockchainData: any = {};
+        let vaultData: any = null;
         try {
-          const roomContent = await relayerService.getRoomData(roomId);
+          // Pass vaultId to fetch vault data if available
+          const roomContent = await relayerService.getRoomData(roomId, dbRoom?.vaultId || undefined);
           if (roomContent?.fields) {
             blockchainData = roomContent.fields;
+          }
+          if (roomContent?.vaultData) {
+            vaultData = roomContent.vaultData;
           }
         } catch (e) {
           // If room not found on chain, it might be an issue, but we still have DB data
@@ -865,7 +1043,72 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
         }
 
         const USDC_DECIMALS = 1_000_000;
-        const status = blockchainData.status !== undefined ? blockchainData.status : (dbRoom ? 0 : 0); // Default to active?
+
+        // Calculate current period based on time
+        const startTimeMs = dbRoom?.startTimeMs || blockchainData.start_time || Date.now();
+        const periodLengthMs = dbRoom?.periodLengthMs || blockchainData.period_length || (7 * 24 * 60 * 60 * 1000);
+        const totalPeriods = dbRoom?.totalPeriods || blockchainData.total_periods || 0;
+        const now = Date.now();
+        const elapsedMs = now - Number(startTimeMs);
+        let currentPeriod = 0;
+        if (elapsedMs > 0) {
+          currentPeriod = Math.floor(elapsedMs / Number(periodLengthMs));
+        }
+
+        // Determine status: Override blockchain status if room is still active based on time
+        let status = blockchainData.status !== undefined ? blockchainData.status : 0;
+        // If current period < total periods, force status to 0 (Active)
+        if (currentPeriod < totalPeriods) {
+          status = 0; // Active
+        } else if (currentPeriod >= totalPeriods && status === 0) {
+          // If time is up but blockchain status is still 0, set to 1 (Claiming)
+          status = 1;
+        }
+
+        // Calculate reward pool from vault data (balance value)
+        // Balance<T> struct has 'value' field
+        const rewardBalance = vaultData?.reward?.fields?.value || vaultData?.reward || 0;
+        const rewardPool = Number(rewardBalance) / USDC_DECIMALS;
+
+        // Calculate totalDeposit from participant events (sum of ALL deposits in room)
+        let totalDeposit = 0;
+        try {
+          const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
+
+          // Query all PlayerJoined and DepositMade events for ALL users in this room
+          const [allJoinEvents, allDepositEvents] = await Promise.all([
+            suiClient.queryEvents({
+              query: { MoveEventType: `${packageId}::money_race_v2::PlayerJoined` },
+              limit: 50,
+            }),
+            suiClient.queryEvents({
+              query: { MoveEventType: `${packageId}::money_race_v2::DepositMade` },
+              limit: 100,
+            }),
+          ]);
+
+          // Sum deposits from PlayerJoined events for this room
+          allJoinEvents.data
+            .filter((event: any) => event.parsedJson?.room_id === roomId)
+            .forEach((event: any) => {
+              const amount = parseInt(event.parsedJson?.amount) || 0;
+              totalDeposit += amount;
+            });
+
+          // Sum deposits from DepositMade events for this room
+          allDepositEvents.data
+            .filter((event: any) => event.parsedJson?.room_id === roomId)
+            .forEach((event: any) => {
+              const amount = parseInt(event.parsedJson?.amount) || 0;
+              totalDeposit += amount;
+            });
+
+          // Convert from USDC decimals
+          totalDeposit = totalDeposit / USDC_DECIMALS;
+        } catch (error) {
+          console.log(`Could not calculate totalDeposit for room ${roomId}:`, error);
+          totalDeposit = 0;
+        }
 
         const roomObj = {
           roomId: roomId,
@@ -876,11 +1119,13 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
           myDeposit: userRoom.totalDeposit / USDC_DECIMALS,
           depositsCount: userRoom.depositsCount,
           // Room info from database/blockchain
-          totalPeriods: dbRoom?.totalPeriods || blockchainData.total_periods || 0,
+          totalPeriods: totalPeriods,
           depositAmount: (dbRoom?.depositAmount || blockchainData.deposit_amount || 0) / USDC_DECIMALS,
           strategyId: dbRoom?.strategyId || blockchainData.strategy_id || 0,
           isPrivate: dbRoom?.isPrivate || false,
-          status: status, // 0 = active, 1 = ended
+          status: status, // 0 = active, 1 = claiming (time-based override applied)
+          rewardPool: rewardPool, // Real blockchain data!
+          totalDeposit: totalDeposit, // Total pool from vault principal
         };
 
         fetchedRooms.push(roomObj);
@@ -891,8 +1136,8 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
     }
 
     // --- FILTERING LOGIC ---
-    // User requested: Only show Active rooms, hide all Ended rooms
-    // Status: 0 = Pending, 1 = Active, 2 = Ended/Finished
+    // Only show Active and Claiming rooms, hide Ended rooms
+    // Status: 0 = Active, 1 = Claiming, 2 = Ended
     // Keep rooms where status is NOT 2 (ended)
 
     const activeRooms = fetchedRooms.filter(r => {
