@@ -128,11 +128,11 @@ router.post('/create', async (req: Request, res: Response) => {
     // Check type to correctly identify Room vs Vault (order may vary)
     if (result.effects?.created && result.effects.created.length >= 2) {
       console.log('Found created objects:', result.effects.created.length);
-      
+
       for (const created of result.effects.created) {
         const objectId = created.reference?.objectId;
         console.log('Processing created object:', objectId, 'objectType:', created.objectType);
-        
+
         // Check objectType if available in effects
         if (created.objectType) {
           if (created.objectType.includes('::Room')) {
@@ -144,14 +144,14 @@ router.post('/create', async (req: Request, res: Response) => {
           }
         }
       }
-      
+
       // Fallback: if objectType not in effects, we need to fetch and check
       if (!roomId || !vaultId) {
         console.log('⚠️ ObjectType not in effects, fetching objects to determine types...');
-        
+
         // Wait a bit for blockchain to index the objects
         await new Promise(resolve => setTimeout(resolve, 1000));
-        
+
         for (const created of result.effects.created) {
           const objectId = created.reference?.objectId;
           if (!objectId) {
@@ -645,7 +645,7 @@ router.get('/:id/participants', async (req: Request, res: Response) => {
         const parsedJson = event.parsedJson as any;
         const player = parsedJson.player;
         const amount = parseInt(parsedJson.amount) || 0;
-        
+
         if (participantMap.has(player)) {
           const existing = participantMap.get(player)!;
           existing.totalDeposit += amount;
@@ -749,28 +749,46 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'User address required' });
     }
 
-    console.log('Fetching rooms joined by user:', userAddress);
+    console.log('Fetching rooms for user:', userAddress);
 
-    // Query PlayerJoined events
-    const joinEvents = await suiClient.queryEvents({
-      query: {
-        MoveEventType: `${packageId}::money_race::PlayerJoined`
-      },
-      limit: 100,
-    });
+    // Fetch PlayerJoined events with error handling
+    let joinEvents;
+    try {
+      joinEvents = await suiClient.queryEvents({
+        query: {
+          MoveEventType: `${packageId}::money_race::PlayerJoined`
+        },
+        limit: 100,
+        order: 'descending'
+      });
+    } catch (apiError: any) {
+      console.error('Failed to query join events:', apiError);
+      // Return empty list instead of crashing
+      return res.json({ success: true, rooms: [], count: 0, error: 'Blockchain query failed' });
+    }
 
-    // Query DepositMade events to calculate total deposits
-    const depositEvents = await suiClient.queryEvents({
-      query: {
-        MoveEventType: `${packageId}::money_race::DepositMade`
-      },
-      limit: 200,
-    });
+    // Fetch DepositMade events to calculate total deposits
+    let depositEvents;
+    try {
+      depositEvents = await suiClient.queryEvents({
+        query: {
+          MoveEventType: `${packageId}::money_race::DepositMade`
+        },
+        limit: 200,
+        order: 'descending'
+      });
+    } catch (apiError: any) {
+      console.warn('Failed to query deposit events:', apiError);
+      // Continue without deposit info if this fails
+      depositEvents = { data: [] };
+    }
 
     // Filter join events for this user and extract room info
-    const userJoinEvents = joinEvents.data.filter((event: any) => {
+    // Use optional chaining and validation
+    const userJoinEvents = (joinEvents.data || []).filter((event: any) => {
       const parsedJson = event.parsedJson as any;
-      return parsedJson?.player?.toLowerCase() === userAddress.toLowerCase();
+      const player = parsedJson?.player;
+      return typeof player === 'string' && player.toLowerCase() === userAddress.toLowerCase();
     });
 
     // Build rooms map with user's data
@@ -785,90 +803,112 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
 
     // Process user's join events
     for (const event of userJoinEvents) {
-      const parsedJson = event.parsedJson as any;
-      const roomId = parsedJson.room_id;
-      
-      roomsMap.set(roomId, {
-        roomId,
-        playerPositionId: parsedJson.player_position_id,
-        joinedAt: parseInt(event.timestampMs),
-        initialDeposit: parseInt(parsedJson.amount) || 0,
-        totalDeposit: parseInt(parsedJson.amount) || 0,
-        depositsCount: 1,
-      });
-    }
-
-    // Add deposits to rooms
-    for (const event of depositEvents.data) {
-      const parsedJson = event.parsedJson as any;
-      if (parsedJson?.player?.toLowerCase() === userAddress.toLowerCase()) {
+      try {
+        const parsedJson = event.parsedJson as any;
         const roomId = parsedJson.room_id;
-        if (roomsMap.has(roomId)) {
-          const room = roomsMap.get(roomId)!;
-          room.totalDeposit += parseInt(parsedJson.amount) || 0;
-          room.depositsCount += 1;
+        const playerPositionId = parsedJson.player_position_id;
+
+        if (roomId && typeof roomId === 'string' && playerPositionId && typeof playerPositionId === 'string') {
+          roomsMap.set(roomId, {
+            roomId,
+            playerPositionId,
+            joinedAt: parseInt(event.timestampMs) || Date.now(),
+            initialDeposit: parseInt(parsedJson.amount) || 0,
+            totalDeposit: parseInt(parsedJson.amount) || 0,
+            depositsCount: 1,
+          });
         }
+      } catch (e) {
+        console.error('Error parsing join event:', e);
       }
     }
 
-    // Fetch room details from database for each room
-    const roomsWithDetails = await Promise.all(
-      Array.from(roomsMap.values()).map(async (userRoom) => {
-        try {
-          const dbRoom = await roomStoreService.getRoom(userRoom.roomId);
-          
-          // Try to get blockchain data too
-          let blockchainData: any = {};
-          try {
-            const roomContent = await relayerService.getRoomData(userRoom.roomId);
-            if (roomContent?.fields) {
-              blockchainData = roomContent.fields;
-            }
-          } catch (e) {
-            console.log('Could not fetch blockchain data for room:', userRoom.roomId);
+    // Add deposits to rooms
+    for (const event of (depositEvents.data || [])) {
+      try {
+        const parsedJson = event.parsedJson as any;
+        const player = parsedJson?.player;
+        if (typeof player === 'string' && player.toLowerCase() === userAddress.toLowerCase()) {
+          const roomId = parsedJson.room_id;
+          if (roomsMap.has(roomId)) {
+            const room = roomsMap.get(roomId)!;
+            room.totalDeposit += parseInt(parsedJson.amount) || 0;
+            room.depositsCount += 1;
           }
-
-          const USDC_DECIMALS = 1_000_000;
-
-          return {
-            roomId: userRoom.roomId,
-            vaultId: dbRoom?.vaultId || null,
-            playerPositionId: userRoom.playerPositionId,
-            joinedAt: userRoom.joinedAt,
-            myDeposit: userRoom.totalDeposit / USDC_DECIMALS,
-            depositsCount: userRoom.depositsCount,
-            // Room info from database/blockchain
-            totalPeriods: dbRoom?.totalPeriods || blockchainData.total_periods || 0,
-            depositAmount: (dbRoom?.depositAmount || blockchainData.deposit_amount || 0) / USDC_DECIMALS,
-            strategyId: dbRoom?.strategyId || blockchainData.strategy_id || 0,
-            isPrivate: dbRoom?.isPrivate || false,
-            status: blockchainData.status || 1, // 1 = active by default
-          };
-        } catch (error) {
-          console.error('Error fetching room details:', userRoom.roomId, error);
-          return {
-            roomId: userRoom.roomId,
-            playerPositionId: userRoom.playerPositionId,
-            joinedAt: userRoom.joinedAt,
-            myDeposit: userRoom.totalDeposit / 1_000_000,
-            depositsCount: userRoom.depositsCount,
-            totalPeriods: 0,
-            depositAmount: 0,
-            strategyId: 0,
-            isPrivate: false,
-            status: 1,
-          };
         }
-      })
-    );
+      } catch (e) {
+        // Ignore malformed deposit events
+      }
+    }
+
+    const fetchedRooms: any[] = [];
+
+    // Fetch room details from database
+    const roomIds = Array.from(roomsMap.keys());
+    // We can fetch DB rooms in parallel or loop. Using existing service.
+
+    for (const roomId of roomIds) {
+      try {
+        const userRoom = roomsMap.get(roomId)!;
+        const dbRoom = await roomStoreService.getRoom(roomId);
+
+        // Fetch blockchain data robustly
+        let blockchainData: any = {};
+        try {
+          const roomContent = await relayerService.getRoomData(roomId);
+          if (roomContent?.fields) {
+            blockchainData = roomContent.fields;
+          }
+        } catch (e) {
+          // If room not found on chain, it might be an issue, but we still have DB data
+          console.log(`Could not fetch blockchain data for room ${roomId}`);
+        }
+
+        const USDC_DECIMALS = 1_000_000;
+        const status = blockchainData.status !== undefined ? blockchainData.status : (dbRoom ? 0 : 0); // Default to active?
+
+        const roomObj = {
+          roomId: roomId,
+          name: dbRoom?.name || `Savings Room #${roomId.slice(0, 8)}`,
+          vaultId: dbRoom?.vaultId || null,
+          playerPositionId: userRoom.playerPositionId,
+          joinedAt: userRoom.joinedAt,
+          myDeposit: userRoom.totalDeposit / USDC_DECIMALS,
+          depositsCount: userRoom.depositsCount,
+          // Room info from database/blockchain
+          totalPeriods: dbRoom?.totalPeriods || blockchainData.total_periods || 0,
+          depositAmount: (dbRoom?.depositAmount || blockchainData.deposit_amount || 0) / USDC_DECIMALS,
+          strategyId: dbRoom?.strategyId || blockchainData.strategy_id || 0,
+          isPrivate: dbRoom?.isPrivate || false,
+          status: status, // 0 = active, 1 = ended
+        };
+
+        fetchedRooms.push(roomObj);
+      } catch (error) {
+        console.error(`Error processing room ${roomId}:`, error);
+        // Continue to next room
+      }
+    }
+
+    // --- FILTERING LOGIC ---
+    // User requested: Only show Active rooms, hide all Ended rooms
+    // Status: 0 = Pending, 1 = Active, 2 = Ended/Finished
+    // Keep rooms where status is NOT 2 (ended)
+
+    const activeRooms = fetchedRooms.filter(r => {
+      const status = parseInt(r.status) || 0;
+      return status !== 2; // Exclude ended rooms (status 2)
+    });
 
     // Sort by joinedAt (newest first)
-    roomsWithDetails.sort((a, b) => b.joinedAt - a.joinedAt);
+    activeRooms.sort((a, b) => b.joinedAt - a.joinedAt);
+
+    console.log(`Returning ${activeRooms.length} active rooms (filtered from ${fetchedRooms.length} total)`);
 
     res.json({
       success: true,
-      rooms: roomsWithDetails,
-      count: roomsWithDetails.length,
+      rooms: activeRooms,
+      count: activeRooms.length,
     });
   } catch (error: any) {
     console.error('Get user joined rooms error:', error);

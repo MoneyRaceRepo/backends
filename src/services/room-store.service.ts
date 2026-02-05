@@ -21,6 +21,7 @@ function getPrismaClient() {
 
 interface RoomData {
   roomId: string;
+  name?: string | null;
   vaultId: string | null;
   creatorAddress: string;
   totalPeriods: number;
@@ -42,6 +43,7 @@ class RoomStoreService {
     await getPrismaClient().room.upsert({
       where: { roomId: data.roomId },
       update: {
+        name: data.name ?? null,
         vaultId: data.vaultId,
         creatorAddress: data.creatorAddress,
         totalPeriods: data.totalPeriods,
@@ -55,6 +57,7 @@ class RoomStoreService {
       },
       create: {
         roomId: data.roomId,
+        name: data.name ?? null,
         vaultId: data.vaultId,
         creatorAddress: data.creatorAddress,
         totalPeriods: data.totalPeriods,
