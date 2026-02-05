@@ -659,6 +659,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     }
 
     // Fetch rewardPool from vault if vaultId exists
+    let vaultPrincipal = 0;
     if (dbRoom?.vaultId) {
       try {
         const vaultObj = await suiClient.getObject({
@@ -669,7 +670,10 @@ router.get('/:id', async (req: Request, res: Response) => {
         if (vaultObj.data?.content && 'fields' in vaultObj.data.content) {
           const vaultFields = vaultObj.data.content.fields as any;
           const rewardBalance = vaultFields.reward?.fields?.value || vaultFields.reward || 0;
+          const principalBalance = vaultFields.principal?.fields?.value || vaultFields.principal || 0;
+
           rewardPool = Number(rewardBalance) / USDC_DECIMALS;
+          vaultPrincipal = Number(principalBalance) / USDC_DECIMALS;
         }
       } catch (error) {
         console.log(`Could not fetch vault data for room ${id}:`, error);
@@ -677,13 +681,37 @@ router.get('/:id', async (req: Request, res: Response) => {
       }
     }
 
+    // Calculate time-based accrued yield (real-time calculation)
+    if (roomData?.startTimeMs && roomData?.strategy !== undefined && vaultPrincipal > 0) {
+      const startTime = Number(roomData.startTimeMs);
+      const now = Date.now();
+      const elapsedMs = now - startTime;
+      const elapsedYears = elapsedMs / (365.25 * 24 * 60 * 60 * 1000);
+
+      // APY based on strategy
+      let apy = 0.04; // Default: Stable = 4%
+      if (roomData.strategy === 'Growth' || roomData.strategy === 1) {
+        apy = 0.08; // Growth = 8%
+      } else if (roomData.strategy === 'Aggressive' || roomData.strategy === 2) {
+        apy = 0.15; // Aggressive = 15%
+      }
+
+      // Calculate accrued yield: principal × APY × time
+      const accruedYield = vaultPrincipal * apy * elapsedYears;
+
+      // Add accrued yield to existing reward pool
+      rewardPool += accruedYield;
+
+      console.log(`✓ Time-based yield calculated: ${accruedYield.toFixed(6)} USDC (${(elapsedMs / 1000).toFixed(0)}s elapsed)`);
+    }
+
     // Merge database data with blockchain data
     const mergedData = {
       ...roomData,
       vaultId: dbRoom?.vaultId || null,
       transactionDigest: dbRoom?.transactionDigest || null,
-      totalDeposit, // Add totalDeposit from vault
-      rewardPool, // Add rewardPool from vault
+      totalDeposit, // Total deposits from participant events
+      rewardPool, // Blockchain reward + time-based accrual
     };
 
     console.log('✓ Room data merged:', { roomId: id, vaultId: mergedData.vaultId, totalDeposit, rewardPool });
@@ -1068,7 +1096,29 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
         // Calculate reward pool from vault data (balance value)
         // Balance<T> struct has 'value' field
         const rewardBalance = vaultData?.reward?.fields?.value || vaultData?.reward || 0;
-        const rewardPool = Number(rewardBalance) / USDC_DECIMALS;
+        const principalBalance = vaultData?.principal?.fields?.value || vaultData?.principal || 0;
+        let rewardPool = Number(rewardBalance) / USDC_DECIMALS;
+        const vaultPrincipal = Number(principalBalance) / USDC_DECIMALS;
+
+        // Calculate time-based accrued yield (real-time calculation)
+        if (startTimeMs && vaultPrincipal > 0) {
+          const now = Date.now();
+          const elapsedMs = now - Number(startTimeMs);
+          const elapsedYears = elapsedMs / (365.25 * 24 * 60 * 60 * 1000);
+
+          // APY based on strategy
+          const strategyId = dbRoom?.strategyId || blockchainData.strategy_id || 0;
+          let apy = 0.04; // Default: Conservative = 4%
+          if (strategyId === 1) {
+            apy = 0.08; // Growth = 8%
+          } else if (strategyId === 2) {
+            apy = 0.15; // Aggressive = 15%
+          }
+
+          // Calculate accrued yield: principal × APY × time
+          const accruedYield = vaultPrincipal * apy * elapsedYears;
+          rewardPool += accruedYield;
+        }
 
         // Calculate totalDeposit from participant events (sum of ALL deposits in room)
         let totalDeposit = 0;
@@ -1124,8 +1174,8 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
           strategyId: dbRoom?.strategyId || blockchainData.strategy_id || 0,
           isPrivate: dbRoom?.isPrivate || false,
           status: status, // 0 = active, 1 = claiming (time-based override applied)
-          rewardPool: rewardPool, // Real blockchain data!
-          totalDeposit: totalDeposit, // Total pool from vault principal
+          rewardPool: rewardPool, // Blockchain data + time-based accrual
+          totalDeposit: totalDeposit, // Total pool from participant deposits
         };
 
         fetchedRooms.push(roomObj);
