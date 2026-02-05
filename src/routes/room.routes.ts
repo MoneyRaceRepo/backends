@@ -685,9 +685,7 @@ router.get('/:id', async (req: Request, res: Response) => {
     if (roomData?.startTimeMs && roomData?.strategy !== undefined && vaultPrincipal > 0) {
       const startTime = Number(roomData.startTimeMs);
       const now = Date.now();
-      const elapsedMs = now - startTime;
-      const elapsedYears = elapsedMs / (365.25 * 24 * 60 * 60 * 1000);
-
+      
       // APY based on strategy
       let apy = 0.04; // Default: Stable = 4%
       if (roomData.strategy === 'Growth' || roomData.strategy === 1) {
@@ -696,13 +694,29 @@ router.get('/:id', async (req: Request, res: Response) => {
         apy = 0.15; // Aggressive = 15%
       }
 
-      // Calculate accrued yield: principal × APY × time
-      const accruedYield = vaultPrincipal * apy * elapsedYears;
+      // Use persisted accumulatedYield from database
+      let accumulatedYield = dbRoom?.accumulatedYield || 0;
+      const lastUpdateMs = Number(dbRoom?.lastYieldUpdateMs || startTime);
+      
+      // Calculate NEW yield since last update
+      const elapsedSinceLastUpdate = now - lastUpdateMs;
+      const elapsedYears = elapsedSinceLastUpdate / (365.25 * 24 * 60 * 60 * 1000);
+      const newYield = vaultPrincipal * apy * elapsedYears;
+      
+      // Add new yield to accumulated
+      accumulatedYield += newYield;
+      
+      // Update database with new accumulated yield (fire and forget)
+      if (dbRoom && newYield > 0) {
+        roomStoreService.updateYield(id, accumulatedYield, now).catch(err => {
+          console.error('Failed to update yield in DB:', err);
+        });
+      }
 
-      // Add accrued yield to existing reward pool
-      rewardPool += accruedYield;
+      // Add accumulated yield to existing reward pool
+      rewardPool += accumulatedYield;
 
-      console.log(`✓ Time-based yield calculated: ${accruedYield.toFixed(6)} USDC (${(elapsedMs / 1000).toFixed(0)}s elapsed)`);
+      console.log(`✓ Persisted yield: ${accumulatedYield.toFixed(6)} USDC (new: +${newYield.toFixed(6)})`);
     }
 
     // Merge database data with blockchain data
@@ -711,7 +725,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       vaultId: dbRoom?.vaultId || null,
       transactionDigest: dbRoom?.transactionDigest || null,
       totalDeposit, // Total deposits from participant events
-      rewardPool, // Blockchain reward + time-based accrual
+      rewardPool, // Blockchain reward + accumulated yield
     };
 
     console.log('✓ Room data merged:', { roomId: id, vaultId: mergedData.vaultId, totalDeposit, rewardPool });

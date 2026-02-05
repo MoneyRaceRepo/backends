@@ -33,6 +33,8 @@ interface RoomData {
   periodLengthMs: number;
   createdAt: number;
   transactionDigest: string;
+  accumulatedYield?: number;
+  lastYieldUpdateMs?: number;
 }
 
 class RoomStoreService {
@@ -119,6 +121,8 @@ class RoomStoreService {
       periodLengthMs: Number(room.periodLengthMs),
       createdAt: room.createdAt.getTime(),
       transactionDigest: room.transactionDigest,
+      accumulatedYield: room.accumulatedYield,
+      lastYieldUpdateMs: Number(room.lastYieldUpdateMs),
     };
   }
 
@@ -186,7 +190,22 @@ class RoomStoreService {
       periodLengthMs: Number(room.periodLengthMs),
       createdAt: room.createdAt.getTime(),
       transactionDigest: room.transactionDigest,
+      accumulatedYield: room.accumulatedYield,
+      lastYieldUpdateMs: Number(room.lastYieldUpdateMs),
     };
+  }
+
+  /**
+   * Update accumulated yield for a room
+   */
+  async updateYield(roomId: string, accumulatedYield: number, lastYieldUpdateMs: number): Promise<void> {
+    await getPrismaClient().room.update({
+      where: { roomId },
+      data: {
+        accumulatedYield,
+        lastYieldUpdateMs: BigInt(lastYieldUpdateMs),
+      },
+    });
   }
 
   /**

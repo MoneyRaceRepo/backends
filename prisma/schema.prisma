@@ -24,6 +24,8 @@ model Room {
   startTimeMs         BigInt
   periodLengthMs      BigInt
   transactionDigest   String
+  accumulatedYield    Float    @default(0) // Simulated yield that accumulates over time
+  lastYieldUpdateMs   BigInt   @default(0) // Last time yield was updated
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
 
