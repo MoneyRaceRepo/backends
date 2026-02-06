@@ -1027,7 +1027,7 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
           roomsMap.set(roomId, {
             roomId,
             playerPositionId,
-            joinedAt: parseInt(event.timestampMs) || Date.now(),
+            joinedAt: parseInt(event.timestampMs || '0') || Date.now(),
             initialDeposit: parseInt(parsedJson.amount) || 0,
             totalDeposit: parseInt(parsedJson.amount) || 0,
             depositsCount: 1,
