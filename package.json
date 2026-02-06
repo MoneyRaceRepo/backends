@@ -8,7 +8,7 @@
     "dev": "nodemon --exec tsx src/index.ts",
     "start": "tsx src/index.ts",
     "build": "prisma generate && tsc",
-    "postinstall": "prisma generate",
+    "postinstall": "npx prisma generate",
     "serve": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
@@ -16,7 +16,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@mysten/sui.js": "^0.54.1",
+    "@mysten/sui": "^1.0.0",
     "@noble/hashes": "^2.0.1",
     "@prisma/client": "^6.19.2",
     "@types/better-sqlite3": "^7.6.13",

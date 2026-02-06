@@ -1,4 +1,4 @@
-import { SuiClient } from '@mysten/sui.js/client';
+import { SuiClient } from '@mysten/sui/client';
 import { config } from '../config/index.js';
 
 export const suiClient = new SuiClient({

@@ -1,5 +1,5 @@
-import { TransactionBlock } from '@mysten/sui.js/transactions';
-import { bcs } from '@mysten/sui.js/bcs';
+import { Transaction } from '@mysten/sui/transactions';
+import { bcs } from '@mysten/sui/bcs';
 import { suiClient } from '../sui/client.js';
 import { sponsorKeypair } from '../sui/sponsor.js';
 import { config } from '../config/index.js';
@@ -16,7 +16,7 @@ export class RelayerService {
    * Execute a sponsored transaction (LEGACY - backend creates and signs tx)
    * The relayer pays for gas, making it gasless for users
    */
-  async executeSponsoredTx(tx: TransactionBlock, senderAddress?: string): Promise<TxResponse> {
+  async executeSponsoredTx(tx: Transaction, senderAddress?: string): Promise<TxResponse> {
     try {
       // Don't set sender - let sponsor be the signer
       // Input objects owned by user will still work as long as they're passed correctly
@@ -26,9 +26,9 @@ export class RelayerService {
 
       // Sign and execute with sponsor keypair
       // SDK will automatically select gas coin from sponsor wallet
-      const result = await suiClient.signAndExecuteTransactionBlock({
+      const result = await suiClient.signAndExecuteTransaction({
         signer: sponsorKeypair,
-        transactionBlock: tx,
+        Transaction: tx,
         options: {
           showEffects: true,
           showEvents: true,
@@ -88,14 +88,14 @@ export class RelayerService {
 
       if (!isMultiSig) {
         // Single signature - add sponsor signature
-        const sponsorSignature = await sponsorKeypair.signTransactionBlock(txBytesArray);
+        const sponsorSignature = await sponsorKeypair.signTransaction(txBytesArray);
         finalSignature = [userSignature, sponsorSignature.signature];
         console.log('✅ Added sponsor signature to single user signature');
       }
 
       // Execute with signature(s)
-      const result = await suiClient.executeTransactionBlock({
-        transactionBlock: txBytesArray,
+      const result = await suiClient.executeTransaction({
+        Transaction: txBytesArray,
         signature: finalSignature,
         options: {
           showEffects: true,
@@ -134,7 +134,7 @@ export class RelayerService {
     isPrivate: boolean;
     password: string;
   }): Promise<TxResponse> {
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
 
     // Note: isPrivate and password are stored in DB only for now
     // The smart contract create_room doesn't accept these args
@@ -157,7 +157,7 @@ export class RelayerService {
    * Start Room Transaction (Admin only)
    */
   async startRoom(roomId: string): Promise<TxResponse> {
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
 
     tx.moveCall({
       target: `${config.packageId}::money_race_v2::start_room`,
@@ -180,7 +180,7 @@ export class RelayerService {
     clockId: string;
     userAddress: string;
   }): Promise<TxResponse> {
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
 
     tx.moveCall({
       target: `${config.packageId}::money_race_v2::join_room_for`,
@@ -206,7 +206,7 @@ export class RelayerService {
     coinObjectId: string;
     clockId: string;
   }): Promise<TxResponse> {
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
 
     tx.moveCall({
       target: `${config.packageId}::money_race_v2::deposit`,
@@ -226,7 +226,7 @@ export class RelayerService {
    * Finalize Room Transaction (Admin only)
    */
   async finalizeRoom(roomId: string): Promise<TxResponse> {
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
 
     tx.moveCall({
       target: `${config.packageId}::money_race_v2::finalize_room`,
@@ -246,7 +246,7 @@ export class RelayerService {
     vaultId: string;
     coinObjectId: string;
   }): Promise<TxResponse> {
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
 
     tx.moveCall({
       target: `${config.packageId}::money_race_v2::fund_reward_pool`,
@@ -268,7 +268,7 @@ export class RelayerService {
     vaultId: string;
     playerPositionId: string;
   }): Promise<TxResponse> {
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
 
     tx.moveCall({
       target: `${config.packageId}::money_race_v2::claim_all`,
@@ -363,7 +363,7 @@ export class RelayerService {
    * Mint USDC Mock Tokens to a specific recipient
    */
   async mintUSDC(recipient: string, amount: number): Promise<TxResponse> {
-    const tx = new TransactionBlock();
+    const tx = new Transaction();
 
     const faucetId = config.faucetId || USDC_FAUCET_ID;
 
