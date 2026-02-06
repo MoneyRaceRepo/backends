@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { aiService } from '../services/ai.service.js';
+import { sendSuccess, sendError, sendValidationError, sendNotFound } from '../utils/response.js';
 
 const router = Router();
 
@@ -13,18 +14,15 @@ router.post('/recommend', async (req: Request, res: Response) => {
     const { prompt } = req.body;
 
     if (!prompt || typeof prompt !== 'string') {
-      return res.status(400).json({ error: 'Prompt text required' });
+      return sendValidationError(res, 'Prompt text required');
     }
 
     const recommendations = await aiService.getRecommendations({ text: prompt });
 
-    res.json({
-      success: true,
-      ...recommendations,
-    });
+    return sendSuccess(res, recommendations);
   } catch (error: any) {
     console.error('AI recommendation error:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate recommendations' });
+    return sendError(res, error.message || 'Failed to generate recommendations');
   }
 });
 
@@ -37,34 +35,25 @@ router.post('/chat', async (req: Request, res: Response) => {
     const { messages, options } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Messages array required' });
+      return sendValidationError(res, 'Messages array required');
     }
 
     // Validate message format
     for (const msg of messages) {
       if (!msg.role || !msg.content) {
-        return res.status(400).json({
-          error: 'Each message must have role and content',
-        });
+        return sendValidationError(res, 'Each message must have role and content');
       }
       if (!['system', 'user', 'assistant'].includes(msg.role)) {
-        return res.status(400).json({
-          error: 'Invalid message role. Must be system, user, or assistant',
-        });
+        return sendValidationError(res, 'Invalid message role. Must be system, user, or assistant');
       }
     }
 
     const response = await aiService.generalChat(messages, options);
 
-    res.json({
-      success: true,
-      response,
-    });
+    return sendSuccess(res, { response });
   } catch (error: any) {
     console.error('AI chat error:', error);
-    res.status(500).json({
-      error: error.message || 'Failed to complete chat',
-    });
+    return sendError(res, error.message || 'Failed to complete chat');
   }
 });
 
@@ -74,7 +63,7 @@ router.post('/chat', async (req: Request, res: Response) => {
  */
 router.get('/strategies', (_req: Request, res: Response) => {
   const strategies = aiService.getAllStrategies();
-  res.json({ strategies });
+  return sendSuccess(res, { strategies });
 });
 
 /**
@@ -85,22 +74,22 @@ router.get('/strategies/:id', (req: Request, res: Response) => {
   const idParam = req.params.id;
 
   if (!idParam || Array.isArray(idParam)) {
-    return res.status(400).json({ error: 'Invalid strategy ID' });
+    return sendValidationError(res, 'Invalid strategy ID');
   }
 
   const id = parseInt(idParam);
 
   if (isNaN(id)) {
-    return res.status(400).json({ error: 'Invalid strategy ID' });
+    return sendValidationError(res, 'Invalid strategy ID');
   }
 
   const strategy = aiService.getStrategyById(id);
 
   if (!strategy) {
-    return res.status(404).json({ error: 'Strategy not found' });
+    return sendNotFound(res, 'Strategy');
   }
 
-  res.json({ strategy });
+  return sendSuccess(res, { strategy });
 });
 
 export default router;

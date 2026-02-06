@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import jwksClient from 'jwks-rsa';
 import type { AuthenticatedUser, ZkLoginPayload } from '../types/index.js';
+import { JWKS_CACHE_MAX_AGE_MS } from '../constants/index.js';
 
 /**
  * zkLogin Service
@@ -15,7 +16,7 @@ export class ZkLoginService {
     this.jwksClient = jwksClient({
       jwksUri: 'https://www.googleapis.com/oauth2/v3/certs',
       cache: true,
-      cacheMaxAge: 86400000, // 24 hours
+      cacheMaxAge: JWKS_CACHE_MAX_AGE_MS, // 24 hours
     });
 
     this.googleClientId = process.env.GOOGLE_CLIENT_ID || '';

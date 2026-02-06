@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { zkLoginService } from '../services/zklogin.service.js';
+import { sendSuccess, sendValidationError, sendUnauthorized } from '../utils/response.js';
 
 const router = Router();
 
@@ -13,19 +14,16 @@ router.post('/login', async (req: Request, res: Response) => {
     const { jwt } = req.body;
 
     if (!jwt) {
-      return res.status(400).json({ error: 'JWT token required' });
+      return sendValidationError(res, 'JWT token required');
     }
 
     // Authenticate and get Sui address
     const user = await zkLoginService.authenticateSimplified(jwt);
 
-    res.json({
-      success: true,
-      user,
-    });
+    return sendSuccess(res, { user });
   } catch (error: any) {
     console.error('Login error:', error);
-    res.status(401).json({ error: error.message || 'Authentication failed' });
+    return sendUnauthorized(res, error.message || 'Authentication failed');
   }
 });
 
@@ -38,17 +36,14 @@ router.post('/verify', async (req: Request, res: Response) => {
     const { jwt } = req.body;
 
     if (!jwt) {
-      return res.status(400).json({ error: 'JWT token required' });
+      return sendValidationError(res, 'JWT token required');
     }
 
     const user = await zkLoginService.authenticateSimplified(jwt);
 
-    res.json({
-      valid: true,
-      user,
-    });
+    return sendSuccess(res, { valid: true, user });
   } catch (error: any) {
-    res.status(401).json({ valid: false, error: error.message });
+    return sendUnauthorized(res, error.message);
   }
 });
 

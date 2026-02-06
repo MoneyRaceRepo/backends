@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { relayerService } from '../services/relayer.service.js';
+import { sendSuccess, sendError, sendValidationError } from '../utils/response.js';
 
 const router = Router();
 
@@ -15,11 +16,11 @@ router.post('/execute', async (req: Request, res: Response) => {
 
     // Validation
     if (!txBytes || typeof txBytes !== 'string') {
-      return res.status(400).json({ error: 'Transaction bytes required' });
+      return sendValidationError(res, 'Transaction bytes required');
     }
 
     if (!userSignature || typeof userSignature !== 'string') {
-      return res.status(400).json({ error: 'User signature required' });
+      return sendValidationError(res, 'User signature required');
     }
 
     console.log('Executing sponsored transaction with user signature');
@@ -30,16 +31,13 @@ router.post('/execute', async (req: Request, res: Response) => {
       userSignature
     );
 
-    res.json({
-      success: result.success,
+    return sendSuccess(res, {
       digest: result.digest,
       effects: result.effects,
     });
   } catch (error: any) {
     console.error('Sponsored transaction error:', error);
-    res.status(500).json({
-      error: error.message || 'Failed to execute sponsored transaction'
-    });
+    return sendError(res, error.message || 'Failed to execute sponsored transaction');
   }
 });
 

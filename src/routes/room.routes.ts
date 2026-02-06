@@ -5,6 +5,15 @@ import { roomStoreService } from '../services/room-store.service.js';
 import { sponsorKeypair } from '../sui/sponsor.js';
 import { suiClient } from '../sui/client.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
+import { getPackageId, msToYears } from '../utils/blockchain.js';
+import { eventService } from '../services/event.service.js';
+import {
+  USDC_DECIMALS,
+  AUTO_START_DELAY_MS,
+  MILLISECONDS_PER_YEAR,
+  DEFAULT_PERIOD_LENGTH_MS
+} from '../constants/index.js';
+import { sendSuccess, sendError, sendValidationError, sendNotFound } from '../utils/response.js';
 
 const router = Router();
 
@@ -15,13 +24,10 @@ const router = Router();
 router.get('/sponsor', async (req: Request, res: Response) => {
   try {
     const sponsorAddress = sponsorKeypair.toSuiAddress();
-    res.json({
-      success: true,
-      sponsorAddress,
-    });
+    return sendSuccess(res, { sponsorAddress });
   } catch (error: any) {
     console.error('Get sponsor error:', error);
-    res.status(500).json({ error: error.message || 'Failed to get sponsor' });
+    return sendError(res, error.message || 'Failed to get sponsor');
   }
 });
 
@@ -34,7 +40,7 @@ router.post('/execute-sponsored', async (req: Request, res: Response) => {
     const { txBytes, userSignature } = req.body;
 
     if (!txBytes || !userSignature) {
-      return res.status(400).json({ error: 'Missing txBytes or userSignature' });
+      return sendValidationError(res, 'Missing txBytes or userSignature');
     }
 
     console.log('Executing sponsored transaction...');
@@ -46,14 +52,13 @@ router.post('/execute-sponsored', async (req: Request, res: Response) => {
       userSignature
     );
 
-    res.json({
-      success: result.success,
+    return sendSuccess(res, {
       digest: result.digest,
       effects: result.effects,
     });
   } catch (error: any) {
     console.error('Execute sponsored error:', error);
-    res.status(500).json({ error: error.message || 'Failed to execute sponsored transaction' });
+    return sendError(res, error.message || 'Failed to execute sponsored transaction');
   }
 });
 
@@ -72,59 +77,23 @@ router.get('/', async (req: Request, res: Response) => {
       ? allRooms
       : allRooms.filter(room => !room.isPrivate);
 
-    const USDC_DECIMALS = 1_000_000;
+    // Fetch totalDeposit from participant events using event service
+    const events = await eventService.queryRoomEvents();
+    const roomIds = filteredRooms.map(r => r.roomId);
+    const depositMap = await eventService.calculateMultipleRoomDeposits(roomIds, events);
 
-    // Fetch totalDeposit from participant events (sum of all deposits)
-    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
+    const roomsWithTotalDeposit = filteredRooms.map((room) => ({
+      ...room,
+      totalDeposit: depositMap.get(room.roomId) || 0,
+    }));
 
-    // Query all PlayerJoined and DepositMade events
-    const [joinEvents, depositEvents] = await Promise.all([
-      suiClient.queryEvents({
-        query: { MoveEventType: `${packageId}::money_race_v2::PlayerJoined` },
-        limit: 50,
-      }),
-      suiClient.queryEvents({
-        query: { MoveEventType: `${packageId}::money_race_v2::DepositMade` },
-        limit: 100,
-      }),
-    ]);
-
-    const roomsWithTotalDeposit = filteredRooms.map((room) => {
-      let totalDeposit = 0;
-
-      // Sum deposits from PlayerJoined events for this room
-      joinEvents.data
-        .filter((event: any) => event.parsedJson?.room_id === room.roomId)
-        .forEach((event: any) => {
-          const amount = parseInt(event.parsedJson?.amount) || 0;
-          totalDeposit += amount;
-        });
-
-      // Sum deposits from DepositMade events for this room
-      depositEvents.data
-        .filter((event: any) => event.parsedJson?.room_id === room.roomId)
-        .forEach((event: any) => {
-          const amount = parseInt(event.parsedJson?.amount) || 0;
-          totalDeposit += amount;
-        });
-
-      // Convert from USDC decimals to regular number
-      totalDeposit = totalDeposit / USDC_DECIMALS;
-
-      return {
-        ...room,
-        totalDeposit, // Sum of all participant deposits
-      };
-    });
-
-    res.json({
-      success: true,
+    return sendSuccess(res, {
       rooms: roomsWithTotalDeposit,
       count: roomsWithTotalDeposit.length,
     });
   } catch (error: any) {
     console.error('List rooms error:', error);
-    res.status(500).json({ error: error.message || 'Failed to list rooms' });
+    return sendError(res, error.message || 'Failed to list rooms');
   }
 });
 
@@ -138,7 +107,7 @@ router.post('/create', async (req: Request, res: Response) => {
 
     // Validation
     if (!totalPeriods || !depositAmount || strategyId === undefined || !startTimeMs || !periodLengthMs) {
-      return res.status(400).json({ error: 'Missing required fields' });
+      return sendValidationError(res, 'Missing required fields');
     }
 
     // Generate random password for private rooms
@@ -262,8 +231,8 @@ router.post('/create', async (req: Request, res: Response) => {
       // Auto-start the room so users can join immediately
       // Add delay to ensure object is indexed on blockchain
       try {
-        console.log('Auto-starting room in 3 seconds...');
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        console.log(`Auto-starting room in ${AUTO_START_DELAY_MS}ms...`);
+        await new Promise(resolve => setTimeout(resolve, AUTO_START_DELAY_MS));
         const startResult = await relayerService.startRoom(roomId);
         console.log('✓ Room auto-started:', startResult.digest);
       } catch (startError: any) {
@@ -272,18 +241,17 @@ router.post('/create', async (req: Request, res: Response) => {
       }
     }
 
-    res.json({
-      success: result.success,
+    return sendSuccess(res, {
       digest: result.digest,
       effects: result.effects,
       roomId,
       vaultId,
       // Return password only for private rooms (user must save it!)
-      password: isPrivate === true ? generatedPassword : undefined,
-    });
+      ...(isPrivate === true && generatedPassword && { password: generatedPassword }),
+    }, 201);
   } catch (error: any) {
     console.error('Create room error:', error);
-    res.status(500).json({ error: error.message || 'Failed to create room' });
+    return sendError(res, error.message || 'Failed to create room');
   }
 });
 
@@ -296,18 +264,15 @@ router.post('/start', async (req: Request, res: Response) => {
     const { roomId } = req.body;
 
     if (!roomId) {
-      return res.status(400).json({ error: 'Room ID required' });
+      return sendValidationError(res, 'Room ID required');
     }
 
     const result = await relayerService.startRoom(roomId);
 
-    res.json({
-      success: result.success,
-      digest: result.digest,
-    });
+    return sendSuccess(res, { digest: result.digest });
   } catch (error: any) {
     console.error('Start room error:', error);
-    res.status(500).json({ error: error.message || 'Failed to start room' });
+    return sendError(res, error.message || 'Failed to start room');
   }
 });
 
@@ -320,7 +285,7 @@ router.post('/join', async (req: Request, res: Response) => {
     const { txBytes, userSignature } = req.body;
 
     if (!txBytes || !userSignature) {
-      return res.status(400).json({ error: 'Missing txBytes or userSignature' });
+      return sendValidationError(res, 'Missing txBytes or userSignature');
     }
 
     const result = await relayerService.executeSponsoredTxWithUserSignature(
@@ -328,14 +293,13 @@ router.post('/join', async (req: Request, res: Response) => {
       userSignature
     );
 
-    res.json({
-      success: result.success,
+    return sendSuccess(res, {
       digest: result.digest,
       effects: result.effects,
     });
   } catch (error: any) {
     console.error('Join room error:', error);
-    res.status(500).json({ error: error.message || 'Failed to join room' });
+    return sendError(res, error.message || 'Failed to join room');
   }
 });
 
@@ -348,7 +312,7 @@ router.post('/deposit', async (req: Request, res: Response) => {
     const { txBytes, userSignature } = req.body;
 
     if (!txBytes || !userSignature) {
-      return res.status(400).json({ error: 'Missing txBytes or userSignature' });
+      return sendValidationError(res, 'Missing txBytes or userSignature');
     }
 
     const result = await relayerService.executeSponsoredTxWithUserSignature(
@@ -356,14 +320,13 @@ router.post('/deposit', async (req: Request, res: Response) => {
       userSignature
     );
 
-    res.json({
-      success: result.success,
+    return sendSuccess(res, {
       digest: result.digest,
       effects: result.effects,
     });
   } catch (error: any) {
     console.error('Deposit error:', error);
-    res.status(500).json({ error: error.message || 'Failed to deposit' });
+    return sendError(res, error.message || 'Failed to deposit');
   }
 });
 
@@ -376,7 +339,7 @@ router.post('/claim', async (req: Request, res: Response) => {
     const { txBytes, userSignature } = req.body;
 
     if (!txBytes || !userSignature) {
-      return res.status(400).json({ error: 'Missing txBytes or userSignature' });
+      return sendValidationError(res, 'Missing txBytes or userSignature');
     }
 
     const result = await relayerService.executeSponsoredTxWithUserSignature(
@@ -384,14 +347,13 @@ router.post('/claim', async (req: Request, res: Response) => {
       userSignature
     );
 
-    res.json({
-      success: result.success,
+    return sendSuccess(res, {
       digest: result.digest,
       effects: result.effects,
     });
   } catch (error: any) {
     console.error('Claim error:', error);
-    res.status(500).json({ error: error.message || 'Failed to claim' });
+    return sendError(res, error.message || 'Failed to claim');
   }
 });
 
@@ -402,47 +364,17 @@ router.post('/claim', async (req: Request, res: Response) => {
 router.get('/my-rooms/:userAddress', async (req: Request, res: Response) => {
   try {
     const userAddress = req.params.userAddress;
-    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
 
-    if (!userAddress) {
-      return res.status(400).json({ error: 'User address required' });
+    if (!userAddress || Array.isArray(userAddress)) {
+      return sendValidationError(res, 'User address required');
     }
 
     console.log('Fetching rooms for user:', userAddress);
 
-    // Query PlayerJoined events for this user
-    const joinEvents = await suiClient.queryEvents({
-      query: {
-        MoveEventType: `${packageId}::money_race_v2::PlayerJoined`
-      },
-      limit: 100,
-    });
-
-    // Filter events for this specific user and extract room info
-    const userRoomIds = new Set<string>();
-    const roomMap = new Map<string, {
-      roomId: string;
-      playerPositionId: string;
-      joinedAt: string;
-      initialDeposit: number;
-    }>();
-
-    joinEvents.data
-      .filter((event: any) => {
-        const parsedJson = event.parsedJson as any;
-        return parsedJson?.player === userAddress;
-      })
-      .forEach((event: any) => {
-        const parsedJson = event.parsedJson as any;
-        const roomId = parsedJson.room_id;
-        userRoomIds.add(roomId);
-        roomMap.set(roomId, {
-          roomId,
-          playerPositionId: parsedJson.player_position_id,
-          joinedAt: event.timestampMs,
-          initialDeposit: parseInt(parsedJson.amount) || 0,
-        });
-      });
+    // Use event service to get user's joined rooms
+    const userRooms = await eventService.getUserJoinedRooms(userAddress);
+    const userRoomIds = new Set(userRooms.map(r => r.roomId));
+    const roomMap = new Map(userRooms.map(r => [r.roomId, r]));
 
     // Fetch room details from database for each room
     const roomsWithDetails = await Promise.all(
@@ -532,14 +464,13 @@ router.get('/my-rooms/:userAddress', async (req: Request, res: Response) => {
 
     console.log(`✓ Found ${validRooms.length} rooms for user ${userAddress}`);
 
-    res.json({
-      success: true,
+    return sendSuccess(res, {
       rooms: validRooms,
       count: validRooms.length,
     });
   } catch (error: any) {
     console.error('Get my rooms error:', error);
-    res.status(500).json({ error: error.message || 'Failed to get user rooms' });
+    return sendError(res, error.message || 'Failed to get user rooms');
   }
 });
 
@@ -552,7 +483,7 @@ router.post('/find-by-password', async (req: Request, res: Response) => {
     const { password } = req.body;
 
     if (!password) {
-      return res.status(400).json({ error: 'Password required' });
+      return sendValidationError(res, 'Password required');
     }
 
     // Hash the password
@@ -565,22 +496,18 @@ router.post('/find-by-password', async (req: Request, res: Response) => {
     const room = await roomStoreService.findByPasswordHash(hashHex);
 
     if (!room) {
-      return res.status(404).json({
-        error: 'No room found with this password',
-        hint: 'Please check the password and try again'
-      });
+      return sendNotFound(res, 'Room with this password');
     }
 
     console.log('✓ Found room:', room.roomId);
 
-    res.json({
-      success: true,
+    return sendSuccess(res, {
       roomId: room.roomId,
       vaultId: room.vaultId,
     });
   } catch (error: any) {
     console.error('Find by password error:', error);
-    res.status(500).json({ error: error.message || 'Failed to find room' });
+    return sendError(res, error.message || 'Failed to find room');
   }
 });
 
@@ -595,18 +522,12 @@ router.get('/:id', async (req: Request, res: Response) => {
     console.log('GET /room/:id - Request received:', { id });
 
     if (!id || Array.isArray(id)) {
-      return res.status(400).json({
-        error: 'Room ID required',
-        hint: 'Please provide a valid Sui object ID (e.g., 0x123abc...)'
-      });
+      return sendValidationError(res, 'Room ID required. Please provide a valid Sui object ID');
     }
 
     // Validasi format dasar
     if (id.length < 10) {
-      return res.status(400).json({
-        error: 'Invalid Room ID format',
-        hint: 'Room ID should be a valid Sui object ID (minimum 10 characters)'
-      });
+      return sendValidationError(res, 'Invalid Room ID format. Room ID should be a valid Sui object ID (minimum 10 characters)');
     }
 
     // Fetch from database first to get vaultId
@@ -615,44 +536,12 @@ router.get('/:id', async (req: Request, res: Response) => {
     // Fetch blockchain data
     const roomData = await relayerService.getRoomData(id);
 
-    const USDC_DECIMALS = 1_000_000;
-    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
-
-    // Calculate totalDeposit from participant events (sum of all deposits)
+    // Calculate totalDeposit from participant events using event service
     let totalDeposit = 0;
     let rewardPool = 0;
 
     try {
-      // Query PlayerJoined and DepositMade events for this room
-      const [joinEvents, depositEvents] = await Promise.all([
-        suiClient.queryEvents({
-          query: { MoveEventType: `${packageId}::money_race_v2::PlayerJoined` },
-          limit: 50,
-        }),
-        suiClient.queryEvents({
-          query: { MoveEventType: `${packageId}::money_race_v2::DepositMade` },
-          limit: 100,
-        }),
-      ]);
-
-      // Sum deposits from PlayerJoined events for this room
-      joinEvents.data
-        .filter((event: any) => event.parsedJson?.room_id === id)
-        .forEach((event: any) => {
-          const amount = parseInt(event.parsedJson?.amount) || 0;
-          totalDeposit += amount;
-        });
-
-      // Sum deposits from DepositMade events for this room
-      depositEvents.data
-        .filter((event: any) => event.parsedJson?.room_id === id)
-        .forEach((event: any) => {
-          const amount = parseInt(event.parsedJson?.amount) || 0;
-          totalDeposit += amount;
-        });
-
-      // Convert from USDC decimals
-      totalDeposit = totalDeposit / USDC_DECIMALS;
+      totalDeposit = await eventService.calculateRoomTotalDeposit(id);
     } catch (error) {
       console.log(`Could not fetch deposit events for room ${id}:`, error);
       totalDeposit = 0;
@@ -700,7 +589,7 @@ router.get('/:id', async (req: Request, res: Response) => {
       
       // Calculate NEW yield since last update
       const elapsedSinceLastUpdate = now - lastUpdateMs;
-      const elapsedYears = elapsedSinceLastUpdate / (365.25 * 24 * 60 * 60 * 1000);
+      const elapsedYears = msToYears(elapsedSinceLastUpdate);
       const newYield = vaultPrincipal * apy * elapsedYears;
       
       // Add new yield to accumulated
@@ -730,16 +619,10 @@ router.get('/:id', async (req: Request, res: Response) => {
 
     console.log('✓ Room data merged:', { roomId: id, vaultId: mergedData.vaultId, totalDeposit, rewardPool });
 
-    res.json({
-      success: true,
-      room: mergedData,
-    });
+    return sendSuccess(res, { room: mergedData });
   } catch (error: any) {
     console.error('Get room error:', error);
-    res.status(404).json({
-      error: error.message || 'Room not found',
-      hint: 'Make sure the room has been created on the blockchain first'
-    });
+    return sendNotFound(res, 'Room');
   }
 });
 
@@ -752,18 +635,15 @@ router.post('/finalize', async (req: Request, res: Response) => {
     const { roomId } = req.body;
 
     if (!roomId) {
-      return res.status(400).json({ error: 'Room ID required' });
+      return sendValidationError(res, 'Room ID required');
     }
 
     const result = await relayerService.finalizeRoom(roomId);
 
-    res.json({
-      success: result.success,
-      digest: result.digest,
-    });
+    return sendSuccess(res, { digest: result.digest });
   } catch (error: any) {
     console.error('Finalize room error:', error);
-    res.status(500).json({ error: error.message || 'Failed to finalize room' });
+    return sendError(res, error.message || 'Failed to finalize room');
   }
 });
 
@@ -776,7 +656,7 @@ router.post('/fund-reward', async (req: Request, res: Response) => {
     const { vaultId, coinObjectId } = req.body;
 
     if (!vaultId || !coinObjectId) {
-      return res.status(400).json({ error: 'Missing required fields' });
+      return sendValidationError(res, 'Missing required fields');
     }
 
     const result = await relayerService.fundRewardPool({
@@ -784,13 +664,10 @@ router.post('/fund-reward', async (req: Request, res: Response) => {
       coinObjectId,
     });
 
-    res.json({
-      success: result.success,
-      digest: result.digest,
-    });
+    return sendSuccess(res, { digest: result.digest });
   } catch (error: any) {
     console.error('Fund reward error:', error);
-    res.status(500).json({ error: error.message || 'Failed to fund reward pool' });
+    return sendError(res, error.message || 'Failed to fund reward pool');
   }
 });
 
@@ -801,27 +678,13 @@ router.post('/fund-reward', async (req: Request, res: Response) => {
 router.get('/:id/participants', async (req: Request, res: Response) => {
   try {
     const roomId = req.params.id;
-    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
 
     if (!roomId) {
-      return res.status(400).json({ error: 'Room ID required' });
+      return sendValidationError(res, 'Room ID required');
     }
 
-    // Query PlayerJoined events for this room
-    const joinEvents = await suiClient.queryEvents({
-      query: {
-        MoveEventType: `${packageId}::money_race_v2::PlayerJoined`
-      },
-      limit: 50,
-    });
-
-    // Query DepositMade events for this room
-    const depositEvents = await suiClient.queryEvents({
-      query: {
-        MoveEventType: `${packageId}::money_race_v2::DepositMade`
-      },
-      limit: 100,
-    });
+    // Query events using event service
+    const { joinEvents, depositEvents } = await eventService.queryRoomEvents();
 
     // Build participant map from join events
     const participantMap = new Map<string, {
@@ -877,14 +740,13 @@ router.get('/:id/participants', async (req: Request, res: Response) => {
       joinedAt: p.joinedAt,
     }));
 
-    res.json({
-      success: true,
+    return sendSuccess(res, {
       participants,
       count: participants.length,
     });
   } catch (error: any) {
     console.error('Get participants error:', error);
-    res.status(500).json({ error: error.message || 'Failed to get participants' });
+    return sendError(res, error.message || 'Failed to get participants');
   }
 });
 
@@ -895,22 +757,15 @@ router.get('/:id/participants', async (req: Request, res: Response) => {
 router.get('/:id/history', async (req: Request, res: Response) => {
   try {
     const roomId = req.params.id;
-    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
 
     if (!roomId) {
-      return res.status(400).json({ error: 'Room ID required' });
+      return sendValidationError(res, 'Room ID required');
     }
 
-    // Query all relevant events
+    // Query all relevant events using event service
     const [joinEvents, depositEvents] = await Promise.all([
-      suiClient.queryEvents({
-        query: { MoveEventType: `${packageId}::money_race_v2::PlayerJoined` },
-        limit: 100,
-      }),
-      suiClient.queryEvents({
-        query: { MoveEventType: `${packageId}::money_race_v2::DepositMade` },
-        limit: 100,
-      }),
+      eventService.queryPlayerJoinedEvents(100),
+      eventService.queryDepositMadeEvents(100),
     ]);
 
     // Process join events
@@ -940,14 +795,13 @@ router.get('/:id/history', async (req: Request, res: Response) => {
     // Combine and sort by timestamp (newest first)
     const history = [...joins, ...deposits].sort((a, b) => b.timestamp - a.timestamp);
 
-    res.json({
-      success: true,
+    return sendSuccess(res, {
       history,
       count: history.length,
     });
   } catch (error: any) {
     console.error('Get history error:', error);
-    res.status(500).json({ error: error.message || 'Failed to get history' });
+    return sendError(res, error.message || 'Failed to get history');
   }
 });
 
@@ -958,44 +812,26 @@ router.get('/:id/history', async (req: Request, res: Response) => {
 router.get('/user/:address/joined', async (req: Request, res: Response) => {
   try {
     const userAddress = req.params.address as string;
-    const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
 
     if (!userAddress) {
-      return res.status(400).json({ error: 'User address required' });
+      return sendValidationError(res, 'User address required');
     }
 
     console.log('Fetching rooms for user:', userAddress);
 
-    // Fetch PlayerJoined events with error handling
+    // Fetch events with error handling using event service
     let joinEvents;
-    try {
-      joinEvents = await suiClient.queryEvents({
-        query: {
-          MoveEventType: `${packageId}::money_race_v2::PlayerJoined`
-        },
-        limit: 100,
-        order: 'descending'
-      });
-    } catch (apiError: any) {
-      console.error('Failed to query join events:', apiError);
-      // Return empty list instead of crashing
-      return res.json({ success: true, rooms: [], count: 0, error: 'Blockchain query failed' });
-    }
-
-    // Fetch DepositMade events to calculate total deposits
     let depositEvents;
     try {
-      depositEvents = await suiClient.queryEvents({
-        query: {
-          MoveEventType: `${packageId}::money_race_v2::DepositMade`
-        },
-        limit: 200,
-        order: 'descending'
+      const events = await eventService.queryRoomEvents({
+        joinLimit: 100,
+        depositLimit: 200,
       });
+      joinEvents = events.joinEvents;
+      depositEvents = events.depositEvents;
     } catch (apiError: any) {
-      console.warn('Failed to query deposit events:', apiError);
-      // Continue without deposit info if this fails
-      depositEvents = { data: [] };
+      console.error('Failed to query events:', apiError);
+      return sendSuccess(res, { rooms: [], count: 0 });
     }
 
     // Filter join events for this user and extract room info
@@ -1084,11 +920,9 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
           console.log(`Could not fetch blockchain data for room ${roomId}`);
         }
 
-        const USDC_DECIMALS = 1_000_000;
-
         // Calculate current period based on time
         const startTimeMs = dbRoom?.startTimeMs || blockchainData.start_time || Date.now();
-        const periodLengthMs = dbRoom?.periodLengthMs || blockchainData.period_length || (7 * 24 * 60 * 60 * 1000);
+        const periodLengthMs = dbRoom?.periodLengthMs || blockchainData.period_length || DEFAULT_PERIOD_LENGTH_MS;
         const totalPeriods = dbRoom?.totalPeriods || blockchainData.total_periods || 0;
         const now = Date.now();
         const elapsedMs = now - Number(startTimeMs);
@@ -1118,7 +952,7 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
         if (startTimeMs && vaultPrincipal > 0) {
           const now = Date.now();
           const elapsedMs = now - Number(startTimeMs);
-          const elapsedYears = elapsedMs / (365.25 * 24 * 60 * 60 * 1000);
+          const elapsedYears = msToYears(elapsedMs);
 
           // APY based on strategy
           const strategyId = dbRoom?.strategyId || blockchainData.strategy_id || 0;
@@ -1134,43 +968,12 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
           rewardPool += accruedYield;
         }
 
-        // Calculate totalDeposit from participant events (sum of ALL deposits in room)
+        // Calculate totalDeposit from participant events using event service
         let totalDeposit = 0;
         try {
-          const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
-
-          // Query all PlayerJoined and DepositMade events for ALL users in this room
-          const [allJoinEvents, allDepositEvents] = await Promise.all([
-            suiClient.queryEvents({
-              query: { MoveEventType: `${packageId}::money_race_v2::PlayerJoined` },
-              limit: 50,
-            }),
-            suiClient.queryEvents({
-              query: { MoveEventType: `${packageId}::money_race_v2::DepositMade` },
-              limit: 100,
-            }),
-          ]);
-
-          // Sum deposits from PlayerJoined events for this room
-          allJoinEvents.data
-            .filter((event: any) => event.parsedJson?.room_id === roomId)
-            .forEach((event: any) => {
-              const amount = parseInt(event.parsedJson?.amount) || 0;
-              totalDeposit += amount;
-            });
-
-          // Sum deposits from DepositMade events for this room
-          allDepositEvents.data
-            .filter((event: any) => event.parsedJson?.room_id === roomId)
-            .forEach((event: any) => {
-              const amount = parseInt(event.parsedJson?.amount) || 0;
-              totalDeposit += amount;
-            });
-
-          // Convert from USDC decimals
-          totalDeposit = totalDeposit / USDC_DECIMALS;
+          totalDeposit = await eventService.calculateRoomTotalDeposit(roomId);
         } catch (error) {
-          console.log(`Could not calculate totalDeposit for room ${roomId}:`, error);
+          console.log(`Could not calculate deposits for room ${roomId}:`, error);
           totalDeposit = 0;
         }
 
@@ -1214,14 +1017,13 @@ router.get('/user/:address/joined', async (req: Request, res: Response) => {
 
     console.log(`Returning ${activeRooms.length} active rooms (filtered from ${fetchedRooms.length} total)`);
 
-    res.json({
-      success: true,
+    return sendSuccess(res, {
       rooms: activeRooms,
       count: activeRooms.length,
     });
   } catch (error: any) {
     console.error('Get user joined rooms error:', error);
-    res.status(500).json({ error: error.message || 'Failed to get user rooms' });
+    return sendError(res, error.message || 'Failed to get user rooms');
   }
 });
 

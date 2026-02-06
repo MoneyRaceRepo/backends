@@ -5,6 +5,7 @@ import { sponsorKeypair } from '../sui/sponsor.js';
 import { config } from '../config/index.js';
 import type { TxResponse } from '../types/index.js';
 import { keccak_256 } from '@noble/hashes/sha3.js';
+import { GAS_BUDGET, USDC_FAUCET_ID, CLOCK_ID } from '../constants/index.js';
 
 /**
  * Transaction Relayer Service
@@ -21,7 +22,7 @@ export class RelayerService {
       // Input objects owned by user will still work as long as they're passed correctly
 
       // Set gas budget
-      tx.setGasBudget(100000000); // 0.1 SUI
+      tx.setGasBudget(GAS_BUDGET); // 0.1 SUI
 
       // Sign and execute with sponsor keypair
       // SDK will automatically select gas coin from sponsor wallet
@@ -364,13 +365,12 @@ export class RelayerService {
   async mintUSDC(recipient: string, amount: number): Promise<TxResponse> {
     const tx = new TransactionBlock();
 
-    const USDC_FAUCET_ID = config.faucetId || '0x6f101a733c447a22520807012911552c061a3f63a47129e949f5c2af448cc525';
-    const CLOCK_ID = '0x6';
+    const faucetId = config.faucetId || USDC_FAUCET_ID;
 
     tx.moveCall({
       target: `${config.packageId}::usdc::mint_to`,
       arguments: [
-        tx.object(USDC_FAUCET_ID),
+        tx.object(faucetId),
         tx.pure(recipient, 'address'),
         tx.pure(amount, 'u64'),
         tx.object(CLOCK_ID),
@@ -413,12 +413,11 @@ export class RelayerService {
     lastMintTime: number | null;
   }> {
     try {
-      const USDC_FAUCET_ID = config.faucetId || '0x6f101a733c447a22520807012911552c061a3f63a47129e949f5c2af448cc525';
-      const CLOCK_ID = '0x6';
+      const faucetId = config.faucetId || USDC_FAUCET_ID;
 
       // Get faucet object to check cooldown
       const faucetObject = await suiClient.getObject({
-        id: USDC_FAUCET_ID,
+        id: faucetId,
         options: { showContent: true },
       });
 

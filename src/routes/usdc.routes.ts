@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { relayerService } from '../services/relayer.service.js';
+import { MAX_USDC_MINT_UNITS, USDC_DECIMALS } from '../constants/index.js';
+import { sendSuccess, sendValidationError, sendError } from '../utils/response.js';
 
 const router = Router();
 
@@ -14,44 +16,36 @@ router.post('/mint', async (req: Request, res: Response) => {
 
     // Validation
     if (!recipient || typeof recipient !== 'string') {
-      return res.status(400).json({ error: 'Recipient address required' });
+      return sendValidationError(res, 'Recipient address required');
     }
 
     if (!amount || amount <= 0) {
-      return res.status(400).json({ error: 'Invalid amount' });
+      return sendValidationError(res, 'Invalid amount');
     }
 
-    // Max 1000 USDC per mint (1000 * 10^6 = 1000000000)
-    const MAX_MINT = 1000000000;
-    if (amount > MAX_MINT) {
-      return res.status(400).json({
-        error: 'Amount too large',
-        hint: 'Maximum 1000 USDC per mint'
-      });
+    // Max 1000 USDC per mint
+    if (amount > MAX_USDC_MINT_UNITS) {
+      return sendValidationError(res, 'Amount too large. Maximum 1000 USDC per mint');
     }
 
     // Mint USDC via gasless transaction to the recipient address
     const result = await relayerService.mintUSDC(recipient, amount);
 
-    res.json({
-      success: result.success,
+    return sendSuccess(res, {
       digest: result.digest,
       effects: result.effects,
-      recipient: recipient,
-      amount: amount,
+      recipient,
+      amount,
     });
   } catch (error: any) {
     console.error('Mint USDC error:', error);
 
     // Handle cooldown error
     if (error.message?.includes('COOLDOWN_NOT_PASSED')) {
-      return res.status(429).json({
-        error: 'Cooldown period not passed',
-        hint: 'You can mint USDC once every 24 hours. Please try again later.'
-      });
+      return sendError(res, 'Cooldown period not passed. You can mint USDC once every 24 hours.', 429);
     }
 
-    res.status(500).json({ error: error.message || 'Failed to mint USDC' });
+    return sendError(res, error.message || 'Failed to mint USDC');
   }
 });
 
@@ -64,21 +58,20 @@ router.get('/balance/:address', async (req: Request, res: Response) => {
     const address = req.params.address as string;
 
     if (!address) {
-      return res.status(400).json({ error: 'Address required' });
+      return sendValidationError(res, 'Address required');
     }
 
     // Get USDC balance from blockchain
     const balance = await relayerService.getUSDCBalance(address);
 
-    res.json({
-      success: true,
+    return sendSuccess(res, {
       address,
       balance: balance.toString(),
-      balanceFormatted: (Number(balance) / 1_000_000).toFixed(2), // 6 decimals
+      balanceFormatted: (Number(balance) / USDC_DECIMALS).toFixed(2),
     });
   } catch (error: any) {
     console.error('Get balance error:', error);
-    res.status(500).json({ error: error.message || 'Failed to get balance' });
+    return sendError(res, error.message || 'Failed to get balance');
   }
 });
 
@@ -91,21 +84,20 @@ router.get('/faucet/:address', async (req: Request, res: Response) => {
     const address = req.params.address as string;
 
     if (!address) {
-      return res.status(400).json({ error: 'Address required' });
+      return sendValidationError(res, 'Address required');
     }
 
     // Check cooldown status
     const faucetInfo = await relayerService.getUSDCFaucetInfo(address);
 
-    res.json({
-      success: true,
+    return sendSuccess(res, {
       canMint: faucetInfo.canMint,
       timeUntilNextMint: faucetInfo.timeUntilNextMint,
       lastMintTime: faucetInfo.lastMintTime,
     });
   } catch (error: any) {
     console.error('Get faucet info error:', error);
-    res.status(500).json({ error: error.message || 'Failed to get faucet info' });
+    return sendError(res, error.message || 'Failed to get faucet info');
   }
 });
 
