@@ -632,13 +632,13 @@ router.get('/:id', async (req: Request, res: Response) => {
  */
 router.post('/finalize', async (req: Request, res: Response) => {
   try {
-    const { roomId } = req.body;
+    const { roomId, vaultId } = req.body;
 
-    if (!roomId) {
-      return sendValidationError(res, 'Room ID required');
+    if (!roomId || !vaultId) {
+      return sendValidationError(res, 'Room ID and Vault ID required');
     }
 
-    const result = await relayerService.finalizeRoom(roomId);
+    const result = await relayerService.finalizeRoom(roomId, vaultId);
 
     return sendSuccess(res, { digest: result.digest });
   } catch (error: any) {

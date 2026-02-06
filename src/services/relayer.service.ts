@@ -27,8 +27,8 @@ export class RelayerService {
       // Sign and execute with sponsor keypair
       // SDK will automatically select gas coin from sponsor wallet
       const result = await suiClient.signAndExecuteTransaction({
+        transaction: tx,
         signer: sponsorKeypair,
-        Transaction: tx,
         options: {
           showEffects: true,
           showEvents: true,
@@ -94,8 +94,8 @@ export class RelayerService {
       }
 
       // Execute with signature(s)
-      const result = await suiClient.executeTransaction({
-        Transaction: txBytesArray,
+      const result = await suiClient.executeTransactionBlock({
+        transactionBlock: txBytesArray,
         signature: finalSignature,
         options: {
           showEffects: true,
@@ -142,11 +142,11 @@ export class RelayerService {
     tx.moveCall({
       target: `${config.packageId}::money_race_v2::create_room`,
       arguments: [
-        tx.pure(params.totalPeriods, 'u64'),
-        tx.pure(params.depositAmount, 'u64'),
-        tx.pure(params.strategyId, 'u8'),
-        tx.pure(params.startTimeMs, 'u64'),
-        tx.pure(params.periodLengthMs, 'u64'),
+        tx.pure(bcs.u64().serialize(params.totalPeriods)),
+        tx.pure(bcs.u64().serialize(params.depositAmount)),
+        tx.pure(bcs.u8().serialize(params.strategyId)),
+        tx.pure(bcs.u64().serialize(params.startTimeMs)),
+        tx.pure(bcs.u64().serialize(params.periodLengthMs)),
       ],
     });
 
@@ -189,7 +189,7 @@ export class RelayerService {
         tx.object(params.vaultId),
         tx.object(params.clockId),
         tx.object(params.coinObjectId),
-        tx.pure(params.userAddress, 'address'),
+        tx.pure(bcs.Address.serialize(params.userAddress)),
       ],
     });
 
@@ -225,7 +225,7 @@ export class RelayerService {
   /**
    * Finalize Room Transaction (Admin only)
    */
-  async finalizeRoom(roomId: string): Promise<TxResponse> {
+  async finalizeRoom(roomId: string, vaultId: string): Promise<TxResponse> {
     const tx = new Transaction();
 
     tx.moveCall({
@@ -233,6 +233,7 @@ export class RelayerService {
       arguments: [
         tx.object(config.adminCapId),
         tx.object(roomId),
+        tx.object(vaultId),
       ],
     });
 
@@ -371,8 +372,8 @@ export class RelayerService {
       target: `${config.packageId}::usdc::mint_to`,
       arguments: [
         tx.object(faucetId),
-        tx.pure(recipient, 'address'),
-        tx.pure(amount, 'u64'),
+        tx.pure(bcs.Address.serialize(recipient)),
+        tx.pure(bcs.u64().serialize(amount)),
         tx.object(CLOCK_ID),
       ],
     });

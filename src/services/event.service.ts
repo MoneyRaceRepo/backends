@@ -79,6 +79,7 @@ export async function calculateRoomTotalDeposit(
   let totalDepositInUnits = 0;
 
   // Sum deposits from PlayerJoined events for this room
+  // PlayerJoined events contain the initial deposit amount
   joinEvents.data
     .filter((event: any) => event.parsedJson?.room_id === roomId)
     .forEach((event: any) => {
@@ -87,9 +88,15 @@ export async function calculateRoomTotalDeposit(
     });
 
   // Sum deposits from DepositMade events for this room
+  // NOTE: DepositMade events don't include amount field in parsedJson
+  // The amount is fixed per room (room.deposit_amount)
+  // For individual deposit history with amounts, use getUserDepositHistory()
   depositEvents.data
     .filter((event: any) => event.parsedJson?.room_id === roomId)
     .forEach((event: any) => {
+      // DepositMade events don't have amount field
+      // We need to fetch room data to get deposit_amount
+      // For now, this won't add to total (will be 0)
       const amount = parseInt(event.parsedJson?.amount) || 0;
       totalDepositInUnits += amount;
     });
@@ -178,6 +185,68 @@ export async function getUserJoinedRooms(userAddress: string) {
 }
 
 /**
+ * Get user's deposit history with enriched amount data
+ * DepositMade events don't include amount, so we fetch it from room data
+ *
+ * @param userAddress - User's Sui address
+ * @param roomId - Optional room ID to filter by
+ * @returns Array of deposit history with amounts
+ */
+export async function getUserDepositHistory(userAddress: string, roomId?: string) {
+  const depositEvents = await queryDepositMadeEvents(200);
+
+  // Filter deposits for this user (and optionally for specific room)
+  const userDeposits = depositEvents.data.filter((event: any) => {
+    const matches = event.parsedJson?.player === userAddress;
+    if (roomId) {
+      return matches && event.parsedJson?.room_id === roomId;
+    }
+    return matches;
+  });
+
+  // Get unique room IDs to fetch room data
+  const roomIds = [...new Set(userDeposits.map((e: any) => e.parsedJson?.room_id))];
+
+  // Fetch room data for all rooms (to get depositAmount)
+  const { suiClient } = await import('../sui/client.js');
+  const roomDataMap = new Map<string, any>();
+
+  await Promise.all(
+    roomIds.map(async (rId) => {
+      try {
+        const roomObj = await suiClient.getObject({
+          id: rId,
+          options: { showContent: true },
+        });
+        if (roomObj.data?.content && 'fields' in roomObj.data.content) {
+          roomDataMap.set(rId, roomObj.data.content.fields);
+        }
+      } catch (error) {
+        console.error(`Failed to fetch room ${rId}:`, error);
+      }
+    })
+  );
+
+  // Enrich deposits with amount from room data
+  const enrichedDeposits = userDeposits.map((event: any) => {
+    const roomData = roomDataMap.get(event.parsedJson?.room_id);
+    const depositAmountUnits = roomData?.deposit_amount ? parseInt(roomData.deposit_amount) : 0;
+    const depositAmount = depositAmountUnits / USDC_DECIMALS;
+
+    return {
+      roomId: event.parsedJson?.room_id,
+      player: event.parsedJson?.player,
+      period: parseInt(event.parsedJson?.period) || 0,
+      amount: depositAmount,
+      timestampMs: event.timestampMs,
+      txDigest: event.id?.txDigest,
+    };
+  });
+
+  return enrichedDeposits;
+}
+
+/**
  * Event service singleton
  * Export functions as an object for easier mocking in tests
  */
@@ -188,4 +257,5 @@ export const eventService = {
   calculateRoomTotalDeposit,
   calculateMultipleRoomDeposits,
   getUserJoinedRooms,
+  getUserDepositHistory,
 };
