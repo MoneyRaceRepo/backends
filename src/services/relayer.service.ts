@@ -70,7 +70,7 @@ export class RelayerService {
 
       // Check if userSignature is already a multi-sig (array format)
       // Multi-sig format in Sui can be JSON array string like '["sig1", "sig2"]'
-      let finalSignature: string | string[];
+      let finalSignature: string | string[] = userSignature;
 
       // Try to parse as JSON array
       let isMultiSig = false;

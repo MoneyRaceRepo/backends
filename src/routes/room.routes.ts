@@ -957,7 +957,7 @@ router.get('/:id/history', async (req: Request, res: Response) => {
  */
 router.get('/user/:address/joined', async (req: Request, res: Response) => {
   try {
-    const userAddress = req.params.address;
+    const userAddress = req.params.address as string;
     const packageId = process.env.PACKAGE_ID || '0xaa90da2945b7b5dee82c73a535f0717724b0fa58643aba43972b8e8fbc67c280';
 
     if (!userAddress) {

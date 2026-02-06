@@ -31,6 +31,8 @@ async function createTestRoom() {
     strategyId: 1,             // Strategy 1
     startTimeMs: Date.now() + 60000, // Start in 1 minute
     periodLengthMs: 7 * 24 * 60 * 60 * 1000, // 1 week
+    isPrivate: false,          // Public room
+    password: '',              // No password for public room
   };
 
   console.log('📋 Room Parameters:');

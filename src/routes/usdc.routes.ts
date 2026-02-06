@@ -61,7 +61,7 @@ router.post('/mint', async (req: Request, res: Response) => {
  */
 router.get('/balance/:address', async (req: Request, res: Response) => {
   try {
-    const { address } = req.params;
+    const address = req.params.address as string;
 
     if (!address) {
       return res.status(400).json({ error: 'Address required' });
@@ -88,7 +88,7 @@ router.get('/balance/:address', async (req: Request, res: Response) => {
  */
 router.get('/faucet/:address', async (req: Request, res: Response) => {
   try {
-    const { address } = req.params;
+    const address = req.params.address as string;
 
     if (!address) {
       return res.status(400).json({ error: 'Address required' });
