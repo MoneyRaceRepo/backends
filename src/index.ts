@@ -13,10 +13,10 @@ import { testRpcConnection, testSmartContractConnection } from './sui/client.js'
 
 const app = express();
 
-// Middleware
+// Middleware - Allow all origins for demo/development
 app.use(cors({
-  origin: Array.isArray(config.frontendUrl) ? config.frontendUrl : [config.frontendUrl],
-  credentials: true,
+  origin: '*',
+  credentials: false,
 }));
 app.use(express.json());
 
