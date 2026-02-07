@@ -8,7 +8,7 @@
     "dev": "nodemon --exec tsx src/index.ts",
     "start": "tsx src/index.ts",
     "build": "prisma generate && tsc",
-    "postinstall": "npx prisma generate",
+    "postinstall": "npx prisma migrate deploy && npx prisma generate",
     "serve": "node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
