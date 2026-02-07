@@ -23,8 +23,10 @@ export const config = {
   aiProvider: process.env.AI_PROVIDER || 'dummy',
   openaiApiKey: process.env.OPENAI_API_KEY || '',
 
-  // Frontend
-  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  // Frontend (support multiple origins separated by comma)
+  frontendUrl: process.env.FRONTEND_URL
+    ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
+    : ['http://localhost:3000'],
 
   // Database
   databaseUrl: process.env.DATABASE_URL,
