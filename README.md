@@ -1,41 +1,35 @@
 # MoneyRace Backend
 
-Backend server untuk MoneyRace - Saving game dengan AI recommendation dan Sui blockchain.
-
-## Features
-
-- ✅ **zkLogin Authentication** - Login dengan Google (simplified untuk hackathon)
-- ✅ **Gasless Transactions** - Gas sponsorship untuk UX yang smooth
-- ✅ **AI Recommendations** - Strategy recommendations berdasarkan user prompt
-- ✅ **Transaction Relayer** - Submit transactions on behalf of users
-- ✅ **API Routes** - Complete REST API untuk smart contract interactions
+> Express.js backend for MoneyRace - handles AI recommendations, gasless transaction relaying, and authentication.
 
 ## Tech Stack
 
-- **Runtime**: Node.js + TypeScript
+- **Runtime**: Node.js + TypeScript (tsx)
 - **Framework**: Express.js
-- **Blockchain**: Sui (via @mysten/sui.js)
-- **Auth**: zkLogin (simplified for MVP)
+- **Blockchain**: @mysten/sui SDK
 - **AI**: EigenAI (deepseek-v31-terminus model)
+- **Auth**: Google OAuth JWT + zkLogin
+- **Database**: PostgreSQL (Prisma ORM)
+- **Dev**: Nodemon + tsx
 
 ## Setup
 
-### 1. Install Dependencies
-
 ```bash
-cd backend
+# Install dependencies
 npm install
-```
 
-### 2. Configure Environment Variables
-
-Copy `.env.example` to `.env`:
-
-```bash
+# Configure environment
 cp .env.example .env
+
+# Run database migrations
+npx prisma generate
+
+# Start development server
+npm run dev
+# Server runs at http://localhost:3001
 ```
 
-Edit `.env` dan isi:
+## Environment Variables
 
 ```env
 # Server
@@ -46,439 +40,144 @@ NODE_ENV=development
 SUI_RPC=https://fullnode.testnet.sui.io
 NETWORK=testnet
 
-# Gas Sponsor (REQUIRED)
-# PENTING: Private key ini HARUS sama dengan yang deploy smart contract
-# agar memiliki AdminCap untuk start/finalize room
+# Gas Sponsor (private key for sponsoring transactions)
 SPONSOR_PRIVATE_KEY=suiprivkey1qp...
 
-# Smart Contract (isi setelah deploy)
+# Smart Contract
 PACKAGE_ID=0x...
 ADMIN_CAP_ID=0x...
+FAUCET_ID=0x...
 
-# zkLogin (optional untuk MVP)
-GOOGLE_CLIENT_ID=your_google_client_id.apps.googleusercontent.com
+# Google OAuth
+GOOGLE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+JWT_SECRET=your_jwt_secret
 
-# AI (EigenAI - REQUIRED untuk AI features)
-EIGENAI_API_KEY=sk-your_eigenai_api_key
+# AI
+EIGENAI_API_KEY=sk-your_key
 
-# Frontend
+# Frontend (CORS)
 FRONTEND_URL=http://localhost:3000
+
+# Database
+DATABASE_URL=postgresql://...
 ```
-
-### 3. Get Sponsor Private Key
-
-Untuk mendapatkan sponsor keypair:
-
-```bash
-# Install Sui CLI jika belum
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-cargo install --locked --git https://github.com/MystenLabs/sui.git --branch testnet sui
-
-# Generate keypair
-sui client new-address ed25519
-
-# Copy private key yang muncul ke SPONSOR_PRIVATE_KEY
-```
-
-### 4. Fund Sponsor Address
-
-Sponsor address perlu SUI untuk membayar gas:
-
-```bash
-# Get address dari private key
-sui keytool list
-
-# Request testnet SUI
-curl --location --request POST 'https://faucet.testnet.sui.io/gas' \
---header 'Content-Type: application/json' \
---data-raw '{
-    "FixedAmountRequest": {
-        "recipient": "YOUR_SPONSOR_ADDRESS"
-    }
-}'
-```
-
-### 5. Deploy Smart Contract
-
-```bash
-cd ../money_race
-
-# Build contract
-sui move build
-
-# Deploy
-sui client publish --gas-budget 100000000
-
-# Copy:
-# - Package ID ke .env PACKAGE_ID
-# - AdminCap object ID ke .env ADMIN_CAP_ID
-```
-
-### 6. Run Server
-
-```bash
-cd ../backend
-
-# Development mode
-npm run dev
-
-# Production mode
-npm run build
-npm run serve
-```
-
-Server akan jalan di `http://localhost:3001`
 
 ## API Endpoints
 
-### Health Check
+### Health & Status
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Server health check |
+| `/contract-status` | GET | Sui RPC & contract connection status |
+
+### Authentication
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/auth/login` | POST | Login with Google OAuth JWT |
+| `/auth/verify` | POST | Verify JWT token |
+
+### AI
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/ai/recommend` | POST | Get strategy recommendations based on user prompt |
+| `/ai/chat` | POST | General chat with AI assistant |
+| `/ai/strategies` | GET | List all available strategies |
+| `/ai/strategies/:id` | GET | Get strategy by ID |
+
+### Rooms
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/room/create` | POST | Create a savings room on-chain |
+| `/room/join` | POST | Join an existing room |
+| `/room/deposit` | POST | Make a deposit (gasless) |
+| `/room/claim` | POST | Claim rewards after room ends |
+| `/room/start` | POST | Start a room (admin) |
+| `/room/finalize` | POST | Finalize a room (admin) |
+| `/room/fund-reward` | POST | Fund reward pool (admin) |
+| `/room/:id` | GET | Get room details from blockchain |
+| `/room/list` | GET | List available rooms |
+| `/room/find-private` | POST | Find private room by password |
+
+### Players
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/player/:id` | GET | Get player position data |
+| `/player/profile` | GET | Get user profile |
+| `/player/stats` | GET | Get player statistics |
+
+### USDC
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/usdc/mint` | POST | Mint testnet USDC (faucet) |
+| `/usdc/balance/:address` | GET | Check USDC balance |
+
+### Sponsored Transactions
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/sponsored/execute` | POST | Execute a sponsored transaction |
+
+## Project Structure
+
+```
+backends/
+└── src/
+    ├── index.ts              # Express app entry point
+    ├── config/               # Environment config
+    ├── middleware/            # Error handling middleware
+    ├── routes/               # API route handlers
+    │   ├── auth.routes.ts
+    │   ├── ai.routes.ts
+    │   ├── room.routes.ts
+    │   ├── player.routes.ts
+    │   ├── usdc.routes.ts
+    │   └── sponsored.routes.ts
+    ├── services/             # Business logic
+    │   ├── ai.service.ts          # EigenAI integration
+    │   ├── relayer.service.ts     # Sui transaction builder & sponsor
+    │   ├── zklogin.service.ts     # Google JWT verification
+    │   ├── event.service.ts       # Sui event querying
+    │   └── room-store.service.ts  # Room data persistence
+    ├── sui/                  # Blockchain setup
+    │   ├── client.ts              # SuiClient instance
+    │   └── sponsor.ts             # Sponsor keypair
+    ├── types/                # TypeScript interfaces
+    ├── utils/                # Helpers (response, blockchain)
+    └── constants/            # App constants
+```
+
+## Core Services
+
+### RelayerService
+Builds and sponsors all blockchain transactions. Users never pay gas fees - the backend sponsor wallet covers all costs.
+
+### AIService
+Integrates with EigenAI (deepseek-v31-terminus) to provide personalized savings strategy recommendations based on user goals and risk tolerance.
+
+### ZkLoginService
+Verifies Google OAuth JWTs and derives deterministic Sui addresses, enabling Web2 users to interact with the blockchain without managing private keys.
+
+### EventService
+Queries Sui blockchain events (PlayerJoined, DepositMade) to aggregate room statistics and user history.
+
+## Build & Deploy
 
 ```bash
-GET /health
-```
-
-### Auth Routes
-
-#### Login dengan Google JWT
-```bash
-POST /auth/login
-Content-Type: application/json
-
-{
-  "jwt": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-
-Response:
-{
-  "success": true,
-  "user": {
-    "address": "0xabc123...",
-    "provider": "google",
-    "sub": "123456789"
-  }
-}
-```
-
-#### Verify JWT
-```bash
-POST /auth/verify
-Content-Type: application/json
-
-{
-  "jwt": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
-
-### AI Routes
-
-#### Get Strategy Recommendations
-```bash
-POST /ai/recommend
-Content-Type: application/json
-
-{
-  "prompt": "I want a safe investment strategy for retirement"
-}
-
-Response:
-{
-  "success": true,
-  "strategies": [
-    {
-      "id": 0,
-      "name": "Stable Saver",
-      "description": "Low-risk strategy...",
-      "riskLevel": "low",
-      "expectedReturn": 5,
-      "recommended": true,
-      "reasoning": "Your preference for stability..."
-    },
-    ...
-  ],
-  "userPrompt": "I want a safe investment strategy for retirement",
-  "parsedIntent": {
-    "riskTolerance": "low",
-    "goal": "retirement"
-  }
-}
-```
-
-#### Chat with AI (EigenAI)
-```bash
-POST /ai/chat
-Content-Type: application/json
-
-{
-  "messages": [
-    { "role": "user", "content": "What is the best saving strategy for a beginner?" }
-  ],
-  "options": {
-    "temperature": 0.7,
-    "max_tokens": 1000
-  }
-}
-
-Response:
-{
-  "success": true,
-  "response": {
-    "id": "...",
-    "model": "deepseek-v31-terminus",
-    "choices": [...],
-    "billing": {
-      "creditsRemaining": 0.99,
-      "creditsCharged": 0.001
-    }
-  }
-}
-```
-
-#### Get All Strategies
-```bash
-GET /ai/strategies
-```
-
-#### Get Strategy by ID
-```bash
-GET /ai/strategies/0
-```
-
-### Room Routes
-
-#### Create Room
-```bash
-POST /room/create
-Content-Type: application/json
-
-{
-  "totalPeriods": 4,
-  "depositAmount": 1000000,
-  "strategyId": 1,
-  "startTimeMs": 1704067200000,
-  "periodLengthMs": 604800000
-}
-```
-
-#### Start Room (Admin)
-```bash
-POST /room/start
-Content-Type: application/json
-
-{
-  "roomId": "0x..."
-}
-```
-
-#### Join Room
-```bash
-POST /room/join
-Content-Type: application/json
-
-{
-  "roomId": "0x...",
-  "vaultId": "0x...",
-  "coinObjectId": "0x...",
-  "clockId": "0x6"
-}
-```
-
-#### Deposit
-```bash
-POST /room/deposit
-Content-Type: application/json
-
-{
-  "roomId": "0x...",
-  "vaultId": "0x...",
-  "playerPositionId": "0x...",
-  "coinObjectId": "0x...",
-  "clockId": "0x6"
-}
-```
-
-#### Claim Rewards
-```bash
-POST /room/claim
-Content-Type: application/json
-
-{
-  "roomId": "0x...",
-  "vaultId": "0x...",
-  "playerPositionId": "0x..."
-}
-```
-
-#### Get Room Data
-```bash
-GET /room/{roomId}
-```
-
-#### Finalize Room (Admin)
-```bash
-POST /room/finalize
-Content-Type: application/json
-
-{
-  "roomId": "0x..."
-}
-```
-
-#### Fund Reward Pool (Admin)
-```bash
-POST /room/fund-reward
-Content-Type: application/json
-
-{
-  "vaultId": "0x...",
-  "coinObjectId": "0x..."
-}
-```
-
-### Player Routes
-
-#### Get Player Position
-```bash
-GET /player/{positionId}
-```
-
-## Architecture
-
-```
-backend/
-├── src/
-│   ├── config/          # Configuration
-│   ├── middleware/      # Express middleware
-│   ├── routes/          # API routes
-│   ├── services/        # Business logic
-│   │   ├── ai.service.ts       # AI recommendations
-│   │   ├── relayer.service.ts  # Transaction relayer
-│   │   └── zklogin.service.ts  # Authentication
-│   ├── sui/             # Sui client setup
-│   ├── types/           # TypeScript types
-│   └── index.ts         # Entry point
-├── .env.example
-├── package.json
-└── tsconfig.json
-```
-
-## Development
-
-### File Structure
-
-- **config/** - Environment variables & configuration
-- **middleware/** - Error handling, validation
-- **routes/** - API endpoints (auth, ai, room, player)
-- **services/** - Core business logic
-  - `ai.service.ts` - Strategy recommendations
-  - `relayer.service.ts` - Gas sponsorship & transaction submission
-  - `zklogin.service.ts` - Simplified authentication
-- **sui/** - Sui client & sponsor keypair
-- **types/** - TypeScript interfaces
-
-### Key Services
-
-#### RelayerService
-- Sponsors gas untuk semua transactions
-- Submits transactions on behalf of users
-- Methods: createRoom, joinRoom, deposit, claimAll, etc.
-
-#### AIService
-- Powered by EigenAI (deepseek-v31-terminus model)
-- Chat completion API for general queries
-- Strategy recommendations based on user prompts
-- 3 strategies: Stable Saver, Balanced Builder, Growth Chaser
-
-#### ZkLoginService
-- Simplified auth untuk hackathon MVP
-- Generates deterministic Sui address dari Google sub
-- Production: harus implement full zkLogin dengan zkSNARK proofs
-
-## Testing
-
-### Test Health Endpoint
-```bash
-curl http://localhost:3001/health
-```
-
-### Test AI Recommendation
-```bash
-curl -X POST http://localhost:3001/ai/recommend \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "I want aggressive growth strategy"}'
-```
-
-### Test Create Room
-```bash
-curl -X POST http://localhost:3001/room/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "totalPeriods": 4,
-    "depositAmount": 1000000,
-    "strategyId": 2,
-    "startTimeMs": 1704067200000,
-    "periodLengthMs": 604800000
-  }'
-```
-
-## Troubleshooting
-
-### Error: "SPONSOR_PRIVATE_KEY must be set"
-- Pastikan `.env` file ada dan `SPONSOR_PRIVATE_KEY` terisi
-- Format: `suiprivkey1qp...` atau `0x...`
-
-### Error: "Package ID not configured"
-- Deploy smart contract dulu
-- Copy Package ID ke `.env`
-
-### Error: "Insufficient gas"
-- Fund sponsor address dengan testnet SUI
-- Minimal 1 SUI untuk testing
-
-### Error: "Object is owned by account address X, but given owner/signer address is Y"
-- Ini terjadi karena `SPONSOR_PRIVATE_KEY` berbeda dengan yang deploy smart contract
-- AdminCap dimiliki oleh address yang deploy contract
-- Solusi: Gunakan private key yang sama dengan yang deploy contract
-- Atau transfer AdminCap ke sponsor wallet
-
-### TypeScript Errors
-```bash
-# Clean rebuild
-rm -rf dist/
+# Production build
 npm run build
+
+# Start production server
+npm run serve
 ```
 
-## Next Steps
+Deployed on **Railway**: [moneyrace-backend.up.railway.app](https://moneyrace-backend.up.railway.app/)
 
-1. ✅ Backend setup - DONE
-2. ✅ Deploy smart contract - DONE
-3. ✅ AI Integration (EigenAI) - DONE
-4. ✅ Room Create/Start - DONE
-5. ⏭️ Build frontend
-6. ⏭️ Integration testing
-7. ⏭️ Demo preparation
+## License
 
-## Tested & Working Endpoints
-
-| Endpoint | Status | Notes |
-|----------|--------|-------|
-| `GET /health` | ✅ OK | Server health check |
-| `GET /ai/strategies` | ✅ OK | List all strategies |
-| `POST /ai/recommend` | ✅ OK | AI strategy recommendations |
-| `POST /ai/chat` | ✅ OK | EigenAI chat completion |
-| `POST /room/create` | ✅ OK | Create room on blockchain |
-| `GET /room/:id` | ✅ OK | Fetch room/vault data |
-| `POST /room/start` | ✅ OK | Start room (requires AdminCap) |
-| `POST /auth/login` | ⚠️ | Requires real Google OAuth JWT |
-
-## Notes untuk Hackathon
-
-- **zkLogin**: Simplified untuk MVP, production perlu full implementation
-- **AI**: Powered by EigenAI deepseek-v31-terminus model untuk intelligent responses
-- **Gas**: Semua transactions di-sponsor oleh backend
-- **Clock**: Sui clock object ID = `0x6` (shared object)
-- **API Base URL**: `http://localhost:3001` (tanpa prefix `/api`)
-- **AdminCap**: Required untuk `start_room`, `finalize_room`, `fund_reward_pool`. Pastikan SPONSOR_PRIVATE_KEY adalah key yang deploy contract
-
-## Contact
-
-Untuk pertanyaan atau bantuan, silakan kontak team MoneyRace.
+MIT
